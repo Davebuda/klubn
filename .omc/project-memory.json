@@ -233,28 +233,70 @@
   },
   "hotPaths": [
     {
+      "path": "Program.cs",
+      "accessCount": 10,
+      "lastAccessed": 1776449176927,
+      "type": "directory"
+    },
+    {
+      "path": "",
+      "accessCount": 8,
+      "lastAccessed": 1776449062018,
+      "type": "directory"
+    },
+    {
+      "path": "Frontend\\src\\pages\\admin\\AdminEventsPage.tsx",
+      "accessCount": 8,
+      "lastAccessed": 1776449181625,
+      "type": "directory"
+    },
+    {
       "path": "Frontend\\src\\pages\\CartPage.tsx",
       "accessCount": 7,
       "lastAccessed": 1776440016893,
       "type": "directory"
     },
     {
+      "path": "Frontend\\src",
+      "accessCount": 6,
+      "lastAccessed": 1776449145703,
+      "type": "directory"
+    },
+    {
       "path": "Frontend\\src\\pages\\EventDetailPage.tsx",
-      "accessCount": 3,
-      "lastAccessed": 1776439992269,
+      "accessCount": 5,
+      "lastAccessed": 1776449580708,
       "type": "directory"
     },
     {
       "path": "Frontend\\src\\pages\\LandingPage.tsx",
-      "accessCount": 3,
-      "lastAccessed": 1776439993836,
+      "accessCount": 5,
+      "lastAccessed": 1776449581476,
       "type": "directory"
     },
     {
-      "path": "Frontend\\src\\pages\\admin\\AdminEventsPage.tsx",
-      "accessCount": 3,
-      "lastAccessed": 1776439994563,
+      "path": "Frontend\\src\\pages\\OrdersPage.tsx",
+      "accessCount": 5,
+      "lastAccessed": 1776449582278,
       "type": "directory"
+    },
+    {
+      "path": "Frontend\\src\\pages\\TicketsPage.tsx",
+      "accessCount": 5,
+      "lastAccessed": 1776449583417,
+      "type": "directory"
+    },
+    {
+      "path": "Frontend\\src\\components\\admin\\PortalLayout.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1776449527909,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\pages\\EventsPage.tsx",
+      "accessCount": 4,
+      "lastAccessed": 1776449579530,
+      "type": "file"
     },
     {
       "path": "Frontend\\src\\pages\\organizer\\OrganizerEventForm.tsx",
@@ -269,57 +311,123 @@
       "type": "directory"
     },
     {
-      "path": "Frontend\\src\\pages\\TicketsPage.tsx",
-      "accessCount": 3,
-      "lastAccessed": 1776440006986,
-      "type": "directory"
-    },
-    {
-      "path": "Frontend\\src\\pages\\OrdersPage.tsx",
-      "accessCount": 3,
-      "lastAccessed": 1776440007616,
-      "type": "directory"
-    },
-    {
       "path": "Frontend\\src\\pages\\DashboardPage.tsx",
       "accessCount": 3,
       "lastAccessed": 1776440008972,
       "type": "directory"
     },
     {
-      "path": "Frontend\\src",
-      "accessCount": 2,
-      "lastAccessed": 1776439932601,
-      "type": "directory"
-    },
-    {
-      "path": "Frontend\\src\\components\\admin\\PortalLayout.tsx",
-      "accessCount": 2,
-      "lastAccessed": 1776439976321,
+      "path": "Frontend\\src\\pages\\admin\\AdminVenuesPage.tsx",
+      "accessCount": 3,
+      "lastAccessed": 1776449137296,
       "type": "file"
     },
     {
       "path": "Frontend\\src\\App.tsx",
-      "accessCount": 2,
-      "lastAccessed": 1776439976651,
-      "type": "file"
-    },
-    {
-      "path": "Frontend\\src\\pages\\EventsPage.tsx",
-      "accessCount": 2,
-      "lastAccessed": 1776439993200,
-      "type": "file"
-    },
-    {
-      "path": "Frontend\\src\\pages\\admin\\AdminVenuesPage.tsx",
-      "accessCount": 1,
-      "lastAccessed": 1776439926711,
+      "accessCount": 3,
+      "lastAccessed": 1776449148767,
       "type": "file"
     },
     {
       "path": "Frontend\\src\\pages",
+      "accessCount": 2,
+      "lastAccessed": 1776449528681,
+      "type": "directory"
+    },
+    {
+      "path": "Frontend\\src\\pages\\DJProfilePage.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1776449584578,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\pages\\organizer\\OrganizerEventsList.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1776449585319,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\pages\\admin\\AdminPendingEventsPage.tsx",
+      "accessCount": 2,
+      "lastAccessed": 1776449586348,
+      "type": "file"
+    },
+    {
+      "path": "Domain\\Models",
       "accessCount": 1,
-      "lastAccessed": 1776439944095,
+      "lastAccessed": 1776449062643,
+      "type": "directory"
+    },
+    {
+      "path": "Frontend",
+      "accessCount": 1,
+      "lastAccessed": 1776449063005,
+      "type": "directory"
+    },
+    {
+      "path": "Domain\\Models\\Venue.cs",
+      "accessCount": 1,
+      "lastAccessed": 1776449065893,
+      "type": "file"
+    },
+    {
+      "path": "Domain\\Models\\Event.cs",
+      "accessCount": 1,
+      "lastAccessed": 1776449066382,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\pages\\admin",
+      "accessCount": 1,
+      "lastAccessed": 1776449081191,
+      "type": "directory"
+    },
+    {
+      "path": "Frontend\\src\\graphql",
+      "accessCount": 1,
+      "lastAccessed": 1776449081577,
+      "type": "directory"
+    },
+    {
+      "path": "Frontend\\src\\components\\admin\\AdminLayout.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1776449082002,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\components\\auth\\PortalRoute.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1776449084838,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\context\\AuthContext.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1776449085368,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\graphql\\queries.ts",
+      "accessCount": 1,
+      "lastAccessed": 1776449085661,
+      "type": "file"
+    },
+    {
+      "path": "Application\\Services\\AuthService.cs",
+      "accessCount": 1,
+      "lastAccessed": 1776449100121,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\components\\common\\Header.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1776449106734,
+      "type": "file"
+    },
+    {
+      "path": "Frontend\\src\\pages\\portal",
+      "accessCount": 1,
+      "lastAccessed": 1776449149710,
       "type": "directory"
     }
   ],
