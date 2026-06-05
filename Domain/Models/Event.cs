@@ -22,5 +22,9 @@ namespace DJDiP.Domain.Models
         public string? OrganizerId { get; set; }
         public string Status { get; set; } = "Published";
         public string? StatusReason { get; set; }
+
+        // n8n ingest provenance (used for idempotency)
+        public string? SourcePostId { get; set; }
+        public string? SourcePlatform { get; set; }
     }
 }
