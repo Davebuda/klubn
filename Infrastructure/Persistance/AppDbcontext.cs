@@ -306,6 +306,13 @@ namespace DJDiP.Infrastructure.Persistance
                 .HasIndex(ps => ps.Endpoint)
                 .IsUnique();
 
+            // Idempotency for n8n gallery ingest: unique on SourcePostId, filtered so
+            // null/manually-uploaded media (SourcePostId == null) are exempt.
+            modelBuilder.Entity<GalleryMedia>()
+                .HasIndex(gm => gm.SourcePostId)
+                .IsUnique()
+                .HasFilter("\"SourcePostId\" IS NOT NULL");
+
             base.OnModelCreating(modelBuilder);
         }
     }

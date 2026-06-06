@@ -71,6 +71,17 @@ public class IngestController : ControllerBase
         [JsonPropertyName("source_platform")] public string? SourcePlatform { get; set; }
     }
 
+    public class GalleryIngestDto
+    {
+        public string? title { get; set; }
+        public string? mediaUrl { get; set; }
+        public string? mediaType { get; set; } // "image" or "video", default "image"
+        public string? thumbnailUrl { get; set; }
+        public string? description { get; set; }
+        [JsonPropertyName("source_post_id")] public string? SourcePostId { get; set; }
+        [JsonPropertyName("source_platform")] public string? SourcePlatform { get; set; }
+    }
+
     [HttpPost("events")]
     public async Task<IActionResult> IngestEvent([FromBody] EventIngestDto body)
     {
@@ -162,5 +173,40 @@ public class IngestController : ControllerBase
             return Ok(new { created = false });
         }
         return Created($"/api/ingest/mixes/{mix.Id}", new { created = true, id = mix.Id });
+    }
+
+    [HttpPost("gallery")]
+    public async Task<IActionResult> IngestGallery([FromBody] GalleryIngestDto body)
+    {
+        if (!SecretValid()) return Unauthorized(new { error = "Unauthorized" });
+        if (body == null || string.IsNullOrWhiteSpace(body.mediaUrl) || string.IsNullOrWhiteSpace(body.SourcePostId))
+            return BadRequest(new { error = "mediaUrl and source_post_id are required" });
+
+        if (await _db.GalleryMedia.AnyAsync(g => g.SourcePostId == body.SourcePostId))
+            return Ok(new { created = false });
+
+        var media = new GalleryMedia
+        {
+            Id = Guid.NewGuid(),
+            Title = body.title ?? string.Empty,
+            Description = body.description,
+            MediaUrl = body.mediaUrl!,
+            MediaType = string.IsNullOrWhiteSpace(body.mediaType) ? "image" : body.mediaType!,
+            ThumbnailUrl = body.thumbnailUrl,
+            IsApproved = false, // stays out of the public approvedOnly:true query until an admin approves
+            SourcePostId = body.SourcePostId,
+            SourcePlatform = body.SourcePlatform,
+            UploadedAt = DateTime.UtcNow,
+        };
+        try
+        {
+            await _db.GalleryMedia.AddAsync(media);
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            return Ok(new { created = false }); // unique-index race on SourcePostId
+        }
+        return Created($"/api/ingest/gallery/{media.Id}", new { created = true, id = media.Id });
     }
 }
