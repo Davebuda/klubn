@@ -22,6 +22,38 @@ public class IngestController : ControllerBase
         _config = config;
     }
 
+    // Builds the content-based idempotency key for an event:
+    // lowercase, trimmed, diacritics-folded "yyyy-MM-dd|venueName".
+    // Returns empty string when date or venue is missing (caller then
+    // dedups on SourcePostId alone).
+    private static string ComputeEventKey(string? rawDate, string? venueName)
+    {
+        var venue = venueName?.Trim();
+        if (string.IsNullOrWhiteSpace(venue)) return string.Empty;
+        if (!DateTime.TryParse(rawDate, out var d)) return string.Empty;
+
+        var datePart = d.ToString("yyyy-MM-dd");
+        var key = $"{datePart}|{venue}";
+        return FoldDiacritics(key).Trim().ToLowerInvariant();
+    }
+
+    // Removes combining diacritical marks (e.g. é -> e) so visually-equal
+    // venue names produce the same key regardless of accent encoding.
+    private static string FoldDiacritics(string input)
+    {
+        var normalized = input.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(normalized.Length);
+        foreach (var c in normalized)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString().Normalize(NormalizationForm.FormC);
+    }
+
     private bool SecretValid()
     {
         var expected = _config["N8N_SECRET"];
@@ -89,8 +121,16 @@ public class IngestController : ControllerBase
         if (body == null || string.IsNullOrWhiteSpace(body.title) || string.IsNullOrWhiteSpace(body.SourcePostId))
             return BadRequest(new { error = "title and source_post_id are required" });
 
-        if (await _db.Events.AnyAsync(e => e.SourcePostId == body.SourcePostId))
-            return Ok(new { created = false });
+        // Content-based idempotency key from the incoming payload (empty when
+        // date or venue is missing — then we dedup on SourcePostId alone).
+        var eventKey = ComputeEventKey(body.date, body.venue?.name);
+
+        // Never insert a duplicate: match on SourcePostId OR (non-empty EventKey).
+        var existing = await _db.Events.FirstOrDefaultAsync(e =>
+            e.SourcePostId == body.SourcePostId ||
+            (eventKey != "" && e.EventKey == eventKey));
+        if (existing != null)
+            return Ok(new { status = "duplicate", id = existing.Id, created = false });
 
         var venueName = body.venue?.name?.Trim();
         if (string.IsNullOrWhiteSpace(venueName)) venueName = "Unknown Venue";
@@ -125,6 +165,7 @@ public class IngestController : ControllerBase
             Status = string.IsNullOrWhiteSpace(body.status) ? "Published" : body.status!,
             SourcePostId = body.SourcePostId,
             SourcePlatform = body.SourcePlatform,
+            EventKey = eventKey == "" ? null : eventKey,
         };
         try
         {
