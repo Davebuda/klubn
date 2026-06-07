@@ -26,5 +26,6 @@ namespace DJDiP.Domain.Models
         // n8n ingest provenance (used for idempotency)
         public string? SourcePostId { get; set; }
         public string? SourcePlatform { get; set; }
+        public string? EventKey { get; set; }
     }
 }

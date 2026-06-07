@@ -22,6 +22,33 @@ public class IngestController : ControllerBase
         _config = config;
     }
 
+    // n8n Social Sync: content-based idempotency key (lowercase, trimmed,
+    // diacritics-folded "yyyy-MM-dd|venueName"). Empty when date/venue missing.
+    private static string ComputeEventKey(string? rawDate, string? venueName)
+    {
+        var venue = venueName?.Trim();
+        if (string.IsNullOrWhiteSpace(venue)) return string.Empty;
+        if (!DateTime.TryParse(rawDate, out var d)) return string.Empty;
+        var datePart = d.ToString("yyyy-MM-dd");
+        var key = $"{datePart}|{venue}";
+        return FoldDiacritics(key).Trim().ToLowerInvariant();
+    }
+
+    private static string FoldDiacritics(string input)
+    {
+        var normalized = input.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(normalized.Length);
+        foreach (var c in normalized)
+        {
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c)
+                != System.Globalization.UnicodeCategory.NonSpacingMark)
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString().Normalize(NormalizationForm.FormC);
+    }
+
     private bool SecretValid()
     {
         var expected = _config["N8N_SECRET"];
@@ -78,8 +105,12 @@ public class IngestController : ControllerBase
         if (body == null || string.IsNullOrWhiteSpace(body.title) || string.IsNullOrWhiteSpace(body.SourcePostId))
             return BadRequest(new { error = "title and source_post_id are required" });
 
-        if (await _db.Events.AnyAsync(e => e.SourcePostId == body.SourcePostId))
-            return Ok(new { created = false });
+        var eventKey = ComputeEventKey(body.date, body.venue?.name);
+        var existing = await _db.Events.FirstOrDefaultAsync(e =>
+            e.SourcePostId == body.SourcePostId ||
+            (eventKey != "" && e.EventKey == eventKey));
+        if (existing != null)
+            return Ok(new { status = "duplicate", id = existing.Id, created = false });
 
         var venueName = body.venue?.name?.Trim();
         if (string.IsNullOrWhiteSpace(venueName)) venueName = "Unknown Venue";
@@ -114,6 +145,7 @@ public class IngestController : ControllerBase
             Status = string.IsNullOrWhiteSpace(body.status) ? "Published" : body.status!,
             SourcePostId = body.SourcePostId,
             SourcePlatform = body.SourcePlatform,
+            EventKey = eventKey == "" ? null : eventKey,
         };
         try
         {
