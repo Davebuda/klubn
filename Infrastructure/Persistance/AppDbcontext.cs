@@ -29,6 +29,9 @@ namespace DJDiP.Infrastructure.Persistance
         public DbSet<Ticket> Tickets => Set<Ticket>();
         public DbSet<Venue> Venues => Set<Venue>();
         public DbSet<GalleryMedia> GalleryMedia => Set<GalleryMedia>();
+        public DbSet<TicketType> TicketTypes => Set<TicketType>();
+        public DbSet<TicketHold> TicketHolds => Set<TicketHold>();
+        public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
 
         // Phase 2-4 Entities
         public DbSet<Badge> Badges => Set<Badge>();
@@ -142,6 +145,87 @@ namespace DJDiP.Infrastructure.Persistance
             .HasOne(e => e.Venue)
             .WithMany(v => v.Events)
             .HasForeignKey(e => e.VenueId);
+
+            // ========== TICKETING / VIPPS — TicketType (P1) ==========
+            modelBuilder.Entity<TicketType>(b =>
+            {
+                b.HasOne(tt => tt.Event)
+                    .WithMany(e => e.TicketTypes)
+                    .HasForeignKey(tt => tt.EventId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                // Enum persisted as int; APPEND-ONLY going forward.
+                b.Property(tt => tt.Status).HasConversion<int>();
+
+                // Money in minor units (øre).
+                b.Property(tt => tt.PriceMinor);
+
+                // Oversell backstop. Quoted identifiers are provider-neutral
+                // (valid on both SQLite and PostgreSQL).
+                b.ToTable(t => t.HasCheckConstraint(
+                    "CK_TicketType_Capacity",
+                    "\"QuantitySold\" + \"QuantityHeld\" <= \"Capacity\""));
+            });
+
+            // ========== TICKETING / VIPPS — Order / OrderItem / Payment / Ticket / holds / webhook dedup (P2) ==========
+
+            // Order.Reference is the merchant order ref sent to the provider — UNIQUE
+            // (correctness-critical). Filtered so legacy rows with an empty reference
+            // don't collide before the paid path is live.
+            modelBuilder.Entity<Order>()
+                .HasIndex(o => o.Reference)
+                .IsUnique()
+                .HasFilter("\"Reference\" <> ''");
+
+            // OrderItem → TicketType (tier snapshot). Restrict so a tier in use can't be
+            // hard-deleted out from under issued order lines.
+            modelBuilder.Entity<OrderItem>()
+                .HasOne(oi => oi.TicketType)
+                .WithMany()
+                .HasForeignKey(oi => oi.TicketTypeId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Payment.ProviderReference (== Order.Reference) — UNIQUE. This is the
+            // idempotency backstop P6 relies on (duplicate insert → DbUpdateException).
+            modelBuilder.Entity<Payment>()
+                .HasIndex(p => p.ProviderReference)
+                .IsUnique()
+                .HasFilter("\"ProviderReference\" <> ''");
+
+            // Ticket → OrderItem / TicketType (nullable links; issued tickets backfill them).
+            modelBuilder.Entity<Ticket>()
+                .HasOne(t => t.OrderItem)
+                .WithMany()
+                .HasForeignKey(t => t.OrderItemId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            modelBuilder.Entity<Ticket>()
+                .HasOne(t => t.TicketType)
+                .WithMany()
+                .HasForeignKey(t => t.TicketTypeId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // TicketHold — short-lived inventory reservation.
+            modelBuilder.Entity<TicketHold>(b =>
+            {
+                b.HasOne(h => h.Order)
+                    .WithMany(o => o.Holds)
+                    .HasForeignKey(h => h.OrderId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                b.HasOne(h => h.TicketType)
+                    .WithMany()
+                    .HasForeignKey(h => h.TicketTypeId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                b.Property(h => h.Status).HasConversion<int>();
+            });
+
+            // PaymentWebhookEvent — inbound dedup. UNIQUE composite
+            // (Provider, ProviderPspReference, EventType) is layer-1 idempotency (P6).
+            modelBuilder.Entity<PaymentWebhookEvent>()
+                .HasIndex(w => new { w.Provider, w.ProviderPspReference, w.EventType })
+                .IsUnique();
 
             // ========== PHASE 2-4 ENTITIES ==========
 
