@@ -570,17 +570,18 @@ public class Query
         return await userService.GetUserByIdAsync(userId);
     }
 
-    // All users (admin)
+    // All users (admin). P0-T1: admin-only guard; PasswordHash never projected/exposed.
     public async Task<IEnumerable<AdminUserDto>> Users(
-        [Service] IUnitOfWork unitOfWork)
+        [Service] IUnitOfWork unitOfWork,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        Mutation.RequireAdmin(httpContextAccessor);
         var users = await unitOfWork.Users.GetAllAsync();
         return users.OrderByDescending(u => u.CreatedAt).Select(u => new AdminUserDto
         {
             Id = u.Id,
             FullName = u.FullName,
             Email = u.Email,
-            PasswordHash = u.PasswordHash,
             Role = u.Role,
             IsEmailVerified = u.IsEmailVerified,
             Provider = u.Provider,
@@ -832,7 +833,10 @@ public class LandingPageData
 public class Mutation
 {
     // ========== AUTH HELPERS ==========
-    private static string RequireAuthentication(IHttpContextAccessor accessor)
+    // internal so the Query class (and other resolver types) can reuse the same
+    // JWT-claim-based guards. P0-T1/P0-T3: identity is always derived from the
+    // authenticated principal, never trusted from client input.
+    internal static string RequireAuthentication(IHttpContextAccessor accessor)
     {
         var userId = accessor.HttpContext?.User.FindFirst("userId")?.Value;
         if (string.IsNullOrEmpty(userId))
@@ -840,7 +844,7 @@ public class Mutation
         return userId;
     }
 
-    private static string RequireAdmin(IHttpContextAccessor accessor)
+    internal static string RequireAdmin(IHttpContextAccessor accessor)
     {
         var userId = RequireAuthentication(accessor);
         var role = accessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
@@ -2153,19 +2157,31 @@ public class Mutation
         return true;
     }
 
-    // TICKET MUTATIONS
+    // ========== TICKET MUTATIONS ==========
+    // P0-T3 IDENTITY RULE: the acting buyer's id is ALWAYS derived from the JWT
+    // principal (RequireAuthentication), never from input.UserId. input.UserId is
+    // only honoured where an admin acts on behalf of another user, and only after
+    // RequireAdmin has gated the call (see PurchaseTicket below). A forged userId in
+    // a mutation variable therefore has no effect for non-admin callers.
+    // Public, paid ticket issuance flows through the P5/P6 createTicketOrder + Vipps
+    // capture-webhook path — NOT through this mutation.
     public async Task<TicketDto> PurchaseTicket(
         PurchaseTicketInput input,
         [Service] ITicketService ticketService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAuthentication(httpContextAccessor);
+        // P0-T2: admin-only. Survives solely as an admin comp-ticket tool; the free
+        // public issuance bypass is closed. Public buyers use the paid P5/P6 path.
+        RequireAdmin(httpContextAccessor);
 
         if (string.IsNullOrWhiteSpace(input.Email))
             throw new GraphQLException("Email is required to purchase a ticket.");
         if (!input.TermsAccepted)
             throw new GraphQLException("You must accept the terms to purchase a ticket.");
+        if (string.IsNullOrWhiteSpace(input.UserId))
+            throw new GraphQLException("UserId is required: specify the user this comp ticket is issued to.");
 
+        // Admin-only path: input.UserId is the target recipient (admin acts on behalf of).
         var dto = new CreateTicketDto
         {
             EventId = input.EventId,
@@ -2684,7 +2700,7 @@ public class AdminUserDto
     public string Id { get; set; } = string.Empty;
     public string FullName { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
-    public string PasswordHash { get; set; } = string.Empty;
+    // P0-T1: PasswordHash removed so it can never be selected into the GraphQL schema.
     public int Role { get; set; }
     public bool IsEmailVerified { get; set; }
     public string? Provider { get; set; }
