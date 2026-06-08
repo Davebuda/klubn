@@ -14,6 +14,9 @@ namespace DJDiP.Domain.Models
         public List<Genre> Genres { get; set; } = new();
         public List<Ticket> Tickets { get; set; } = new();
         public List<OrderItem> OrderItems  { get; set;} = new();
+        // Per-tier ticket templates (VIP/GA/Table-for-4...). Event.Price becomes a
+        // "from NOK X" display hint once tiers exist. (ticketing-vipps §2, L1)
+        public List<TicketType> TicketTypes { get; set; } = new();
         public string? ImageUrl { get; set; }
         public string? VideoUrl { get; set; }
         public string? TicketingUrl { get; set; }

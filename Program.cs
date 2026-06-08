@@ -8,6 +8,7 @@ using DJDiP.Application.DTO.VenueDTO;
 using DJDiP.Application.DTO.ContactMessageDTO;
 using DJDiP.Application.DTO.DJTop10DTO;
 using DJDiP.Application.DTO.TicketDTO;
+using DJDiP.Application.DTO.TicketTypeDTO;
 using DJDiP.Application.DTO.SongDTO;
 using DJDiP.Application.DTO.SiteSettingsDTO;
 using DJDiP.Application.DTO.PlaylistDTO;
@@ -592,6 +593,29 @@ public class Query
         });
     }
 
+    // Ticket types for an event (P1-T3). Public callers see only sellable
+    // (OnSale) tiers; Admin/CoAdmin see all tiers for management. Money is
+    // returned in minor units (øre).
+    public async Task<IEnumerable<TicketTypeDto>> TicketTypesByEvent(
+        Guid eventId,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        var role = Mutation.GetCurrentRole(httpContextAccessor);
+        var isManager = role == "Admin" || role == "CoAdmin";
+
+        var query = db.TicketTypes.AsNoTracking().Where(tt => tt.EventId == eventId);
+        if (!isManager)
+            query = query.Where(tt => tt.Status == TicketTypeStatus.OnSale);
+
+        var types = await query
+            .OrderBy(tt => tt.SortOrder)
+            .ThenBy(tt => tt.PriceMinor)
+            .ToListAsync();
+
+        return types.Select(TicketTypeMapper.ToDto);
+    }
+
     // DJ Reviews
     public async Task<IEnumerable<DJReviewDto>> DjReviews(
         Guid djId,
@@ -871,7 +895,7 @@ public class Mutation
         return userId;
     }
 
-    private static string? GetCurrentRole(IHttpContextAccessor accessor)
+    internal static string? GetCurrentRole(IHttpContextAccessor accessor)
     {
         return accessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
     }
@@ -2271,6 +2295,110 @@ public class Mutation
         return true;
     }
 
+    // ========== TICKET TYPE (TIER) MUTATIONS — admin CRUD (P1-T3) ==========
+    // Price is the source of truth for checkout; money is always minor units (øre).
+    public async Task<TicketTypeDto> CreateTicketType(
+        CreateTicketTypeInput input,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+
+        var eventExists = await db.Events.AnyAsync(e => e.Id == input.EventId);
+        if (!eventExists)
+            throw new GraphQLException("Event not found.");
+        if (string.IsNullOrWhiteSpace(input.Name))
+            throw new GraphQLException("Ticket type name is required.");
+        if (input.Capacity < 0)
+            throw new GraphQLException("Capacity cannot be negative.");
+        if (input.AdmitCount < 1)
+            throw new GraphQLException("AdmitCount must be at least 1.");
+        if (input.MinPerOrder < 1 || input.MaxPerOrder < input.MinPerOrder)
+            throw new GraphQLException("Invalid per-order limits.");
+
+        var tt = new TicketType
+        {
+            Id = Guid.NewGuid(),
+            EventId = input.EventId,
+            Name = input.Name,
+            Description = input.Description,
+            PriceMinor = input.PriceMinor,
+            VATRate = input.VATRate ?? 0.12m,
+            Currency = string.IsNullOrWhiteSpace(input.Currency) ? "NOK" : input.Currency!,
+            Capacity = input.Capacity,
+            AdmitCount = input.AdmitCount,
+            MinPerOrder = input.MinPerOrder,
+            MaxPerOrder = input.MaxPerOrder,
+            SalesStart = input.SalesStart,
+            SalesEnd = input.SalesEnd,
+            Status = input.Status ?? TicketTypeStatus.Draft,
+            SortOrder = input.SortOrder
+        };
+
+        db.TicketTypes.Add(tt);
+        await db.SaveChangesAsync();
+        return TicketTypeMapper.ToDto(tt);
+    }
+
+    public async Task<TicketTypeDto> UpdateTicketType(
+        UpdateTicketTypeInput input,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+
+        var tt = await db.TicketTypes.FirstOrDefaultAsync(x => x.Id == input.Id);
+        if (tt == null)
+            throw new GraphQLException("Ticket type not found.");
+
+        if (input.Name != null) tt.Name = input.Name;
+        if (input.Description != null) tt.Description = input.Description;
+        if (input.PriceMinor.HasValue) tt.PriceMinor = input.PriceMinor.Value;
+        if (input.VATRate.HasValue) tt.VATRate = input.VATRate.Value;
+        if (!string.IsNullOrWhiteSpace(input.Currency)) tt.Currency = input.Currency!;
+        if (input.Capacity.HasValue)
+        {
+            if (input.Capacity.Value < tt.QuantitySold + tt.QuantityHeld)
+                throw new GraphQLException("Capacity cannot be set below already sold + held quantity.");
+            tt.Capacity = input.Capacity.Value;
+        }
+        if (input.AdmitCount.HasValue)
+        {
+            if (input.AdmitCount.Value < 1)
+                throw new GraphQLException("AdmitCount must be at least 1.");
+            tt.AdmitCount = input.AdmitCount.Value;
+        }
+        if (input.MinPerOrder.HasValue) tt.MinPerOrder = input.MinPerOrder.Value;
+        if (input.MaxPerOrder.HasValue) tt.MaxPerOrder = input.MaxPerOrder.Value;
+        if (tt.MaxPerOrder < tt.MinPerOrder)
+            throw new GraphQLException("MaxPerOrder cannot be less than MinPerOrder.");
+        if (input.SalesStart.HasValue) tt.SalesStart = input.SalesStart;
+        if (input.SalesEnd.HasValue) tt.SalesEnd = input.SalesEnd;
+        if (input.Status.HasValue) tt.Status = input.Status.Value;
+        if (input.SortOrder.HasValue) tt.SortOrder = input.SortOrder.Value;
+
+        await db.SaveChangesAsync();
+        return TicketTypeMapper.ToDto(tt);
+    }
+
+    public async Task<bool> DeleteTicketType(
+        Guid id,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+
+        var tt = await db.TicketTypes.FirstOrDefaultAsync(x => x.Id == id);
+        if (tt == null)
+            throw new GraphQLException("Ticket type not found.");
+        if (tt.QuantitySold > 0)
+            throw new GraphQLException("Cannot delete a ticket type that has sold tickets.");
+
+        db.TicketTypes.Remove(tt);
+        await db.SaveChangesAsync();
+        return true;
+    }
+
     // DJ REVIEW MUTATIONS
     public async Task<Guid> CreateDjReview(
         CreateDJReviewInput input,
@@ -2542,6 +2670,69 @@ public class TransferTicketInput
     public Guid TicketId { get; set; }
     public string ToUserId { get; set; } = string.Empty;
     public string ToEmail { get; set; } = string.Empty;
+}
+
+// ===== Ticket type (tier) admin CRUD inputs (P1-T3) — money in minor units (øre) =====
+public class CreateTicketTypeInput
+{
+    public Guid EventId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public long PriceMinor { get; set; }
+    public decimal? VATRate { get; set; }
+    public string? Currency { get; set; }
+    public int Capacity { get; set; }
+    public int AdmitCount { get; set; } = 1;
+    public int MinPerOrder { get; set; } = 1;
+    public int MaxPerOrder { get; set; } = 10;
+    public DateTime? SalesStart { get; set; }
+    public DateTime? SalesEnd { get; set; }
+    public TicketTypeStatus? Status { get; set; }
+    public int SortOrder { get; set; }
+}
+
+// All fields optional: only supplied fields are patched.
+public class UpdateTicketTypeInput
+{
+    public Guid Id { get; set; }
+    public string? Name { get; set; }
+    public string? Description { get; set; }
+    public long? PriceMinor { get; set; }
+    public decimal? VATRate { get; set; }
+    public string? Currency { get; set; }
+    public int? Capacity { get; set; }
+    public int? AdmitCount { get; set; }
+    public int? MinPerOrder { get; set; }
+    public int? MaxPerOrder { get; set; }
+    public DateTime? SalesStart { get; set; }
+    public DateTime? SalesEnd { get; set; }
+    public TicketTypeStatus? Status { get; set; }
+    public int? SortOrder { get; set; }
+}
+
+internal static class TicketTypeMapper
+{
+    public static TicketTypeDto ToDto(TicketType tt) => new()
+    {
+        Id = tt.Id,
+        EventId = tt.EventId,
+        Name = tt.Name,
+        Description = tt.Description,
+        PriceMinor = tt.PriceMinor,
+        VATRate = tt.VATRate,
+        Currency = tt.Currency,
+        Capacity = tt.Capacity,
+        QuantitySold = tt.QuantitySold,
+        QuantityHeld = tt.QuantityHeld,
+        Available = tt.Capacity - tt.QuantitySold - tt.QuantityHeld,
+        AdmitCount = tt.AdmitCount,
+        MinPerOrder = tt.MinPerOrder,
+        MaxPerOrder = tt.MaxPerOrder,
+        SalesStart = tt.SalesStart,
+        SalesEnd = tt.SalesEnd,
+        Status = tt.Status.ToString(),
+        SortOrder = tt.SortOrder
+    };
 }
 
 public class CreateSongInput
