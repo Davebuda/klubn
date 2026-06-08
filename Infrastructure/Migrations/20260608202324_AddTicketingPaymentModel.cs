@@ -11,10 +11,20 @@ namespace Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.RenameColumn(
+            // P2-T2: UnitPrice (decimal price) is NOT the same column as UnitVatRate
+            // (a rate). EF mis-scaffolded a decimal→decimal rename, which would move
+            // price values into the VAT-rate column and lose the price. Drop the old
+            // price column and add UnitVatRate fresh (price now lives in UnitPriceMinor).
+            migrationBuilder.DropColumn(
                 name: "UnitPrice",
+                table: "OrderItems");
+
+            migrationBuilder.AddColumn<decimal>(
+                name: "UnitVatRate",
                 table: "OrderItems",
-                newName: "UnitVatRate");
+                type: "TEXT",
+                nullable: false,
+                defaultValue: 0.12m);
 
             migrationBuilder.AddColumn<int>(
                 name: "AdmitCount",
@@ -372,10 +382,16 @@ namespace Infrastructure.Migrations
                 name: "UnitPriceMinor",
                 table: "OrderItems");
 
-            migrationBuilder.RenameColumn(
+            migrationBuilder.DropColumn(
                 name: "UnitVatRate",
+                table: "OrderItems");
+
+            migrationBuilder.AddColumn<decimal>(
+                name: "UnitPrice",
                 table: "OrderItems",
-                newName: "UnitPrice");
+                type: "TEXT",
+                nullable: false,
+                defaultValue: 0m);
         }
     }
 }
