@@ -171,6 +171,18 @@ builder.Services.AddScoped<IGalleryMediaService, GalleryMediaService>();
 builder.Services.AddScoped<IPlaylistService, PlaylistService>();
 builder.Services.AddScoped<IDJMixService, DJMixService>();
 builder.Services.AddHttpClient();
+
+// ========== PAYMENT SEAM (P3 — provider-agnostic) ==========
+// Bind Vipps config (plumbing only; real values arrive with P4 TEST creds).
+builder.Services.Configure<DJDiP.Infrastructure.Payments.Vipps.VippsOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Vipps.VippsOptions.SectionName));
+// Stubs keep the DI graph valid until P4 (provider) / P5-P6 (orchestrator).
+// P4 replaces the provider with a typed-HttpClient VippsPaymentProvider registered
+// by Name ("Vipps") so the P6 webhook can dispatch on the {provider} route segment.
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+    DJDiP.Infrastructure.Payments.NotConfiguredPaymentProvider>();
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentOrchestrator,
+    DJDiP.Infrastructure.Payments.NotConfiguredPaymentOrchestrator>();
 builder.Services.AddScoped<IFileUploadService>(sp =>
 {
     var env = sp.GetRequiredService<IWebHostEnvironment>();
