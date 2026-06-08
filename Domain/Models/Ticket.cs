@@ -6,7 +6,18 @@ namespace DJDiP.Domain.Models
         public Guid EventId { get; set; }
         public string UserId { get; set; }
         public string TicketNumber { get; set; } = Guid.NewGuid().ToString();
+        // QRCode repurposed (P2-T5): now stores the SIGNED token id / nonce (see P7),
+        // not a bare Guid. The unique index on QRCode is retained.
         public string QRCode { get; set; } = Guid.NewGuid().ToString();
+
+        // Ticketing/Vipps links + admit-count (P2-T5).
+        public Guid? OrderItemId { get; set; }       // FK→OrderItem (issuance source)
+        public OrderItem? OrderItem { get; set; }
+        public Guid? TicketTypeId { get; set; }      // FK→TicketType (tier)
+        public TicketType? TicketType { get; set; }
+        public int AdmitCount { get; set; } = 1;     // snapshot from TicketType
+        public int AdmitsRemaining { get; set; }     // = AdmitCount at issue; decremented on partial entry
+        public DateTime? RedeemedAt { get; set; }    // first successful scan
 
         // Pricing (Norwegian VAT compliance - 12% for events)
         public decimal BasePrice { get; set; }
