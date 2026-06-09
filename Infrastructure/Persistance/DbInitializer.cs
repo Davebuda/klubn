@@ -65,13 +65,13 @@ namespace DJDiP.Infrastructure.Persistance
                       ALTER TABLE ""Events"" ADD COLUMN IF NOT EXISTS ""StatusReason"" TEXT;
                       ALTER TABLE ""Events"" ADD COLUMN IF NOT EXISTS ""SourcePostId"" TEXT;
                       ALTER TABLE ""Events"" ADD COLUMN IF NOT EXISTS ""SourcePlatform"" TEXT;
+                      ALTER TABLE ""Events"" ADD COLUMN IF NOT EXISTS ""EventKey"" TEXT;
                       ALTER TABLE ""DJMixes"" ADD COLUMN IF NOT EXISTS ""Source"" TEXT;
                       ALTER TABLE ""DJMixes"" ADD COLUMN IF NOT EXISTS ""Duration"" TEXT;
                       ALTER TABLE ""DJMixes"" ADD COLUMN IF NOT EXISTS ""SourcePostId"" TEXT;
                       ALTER TABLE ""DJMixes"" ADD COLUMN IF NOT EXISTS ""SourcePlatform"" TEXT;
                       CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Events_SourcePostId"" ON ""Events""(""SourcePostId"") WHERE ""SourcePostId"" IS NOT NULL;
                       CREATE UNIQUE INDEX IF NOT EXISTS ""IX_DJMixes_SourcePostId"" ON ""DJMixes""(""SourcePostId"") WHERE ""SourcePostId"" IS NOT NULL;
-                      ALTER TABLE ""Events"" ADD COLUMN IF NOT EXISTS ""EventKey"" TEXT;
                       CREATE INDEX IF NOT EXISTS ""IX_Events_EventKey"" ON ""Events""(""EventKey"") WHERE ""EventKey"" IS NOT NULL;
                       CREATE TABLE IF NOT EXISTS ""EventOrganizerApplications"" (
                         ""Id"" UUID PRIMARY KEY,

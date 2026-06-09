@@ -26,4 +26,8 @@ public class GalleryMedia
 
     // Tags
     public string? Tags { get; set; } // JSON array of tags
+
+    // n8n ingest provenance (used for idempotency)
+    public string? SourcePostId { get; set; }
+    public string? SourcePlatform { get; set; }
 }

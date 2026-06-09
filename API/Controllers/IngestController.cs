@@ -22,18 +22,23 @@ public class IngestController : ControllerBase
         _config = config;
     }
 
-    // n8n Social Sync: content-based idempotency key (lowercase, trimmed,
-    // diacritics-folded "yyyy-MM-dd|venueName"). Empty when date/venue missing.
+    // Builds the content-based idempotency key for an event:
+    // lowercase, trimmed, diacritics-folded "yyyy-MM-dd|venueName".
+    // Returns empty string when date or venue is missing (caller then
+    // dedups on SourcePostId alone).
     private static string ComputeEventKey(string? rawDate, string? venueName)
     {
         var venue = venueName?.Trim();
         if (string.IsNullOrWhiteSpace(venue)) return string.Empty;
         if (!DateTime.TryParse(rawDate, out var d)) return string.Empty;
+
         var datePart = d.ToString("yyyy-MM-dd");
         var key = $"{datePart}|{venue}";
         return FoldDiacritics(key).Trim().ToLowerInvariant();
     }
 
+    // Removes combining diacritical marks (e.g. é -> e) so visually-equal
+    // venue names produce the same key regardless of accent encoding.
     private static string FoldDiacritics(string input)
     {
         var normalized = input.Normalize(NormalizationForm.FormD);
@@ -98,6 +103,17 @@ public class IngestController : ControllerBase
         [JsonPropertyName("source_platform")] public string? SourcePlatform { get; set; }
     }
 
+    public class GalleryIngestDto
+    {
+        public string? title { get; set; }
+        public string? mediaUrl { get; set; }
+        public string? mediaType { get; set; } // "image" or "video", default "image"
+        public string? thumbnailUrl { get; set; }
+        public string? description { get; set; }
+        [JsonPropertyName("source_post_id")] public string? SourcePostId { get; set; }
+        [JsonPropertyName("source_platform")] public string? SourcePlatform { get; set; }
+    }
+
     [HttpPost("events")]
     public async Task<IActionResult> IngestEvent([FromBody] EventIngestDto body)
     {
@@ -105,7 +121,11 @@ public class IngestController : ControllerBase
         if (body == null || string.IsNullOrWhiteSpace(body.title) || string.IsNullOrWhiteSpace(body.SourcePostId))
             return BadRequest(new { error = "title and source_post_id are required" });
 
+        // Content-based idempotency key from the incoming payload (empty when
+        // date or venue is missing — then we dedup on SourcePostId alone).
         var eventKey = ComputeEventKey(body.date, body.venue?.name);
+
+        // Never insert a duplicate: match on SourcePostId OR (non-empty EventKey).
         var existing = await _db.Events.FirstOrDefaultAsync(e =>
             e.SourcePostId == body.SourcePostId ||
             (eventKey != "" && e.EventKey == eventKey));
@@ -194,5 +214,40 @@ public class IngestController : ControllerBase
             return Ok(new { created = false });
         }
         return Created($"/api/ingest/mixes/{mix.Id}", new { created = true, id = mix.Id });
+    }
+
+    [HttpPost("gallery")]
+    public async Task<IActionResult> IngestGallery([FromBody] GalleryIngestDto body)
+    {
+        if (!SecretValid()) return Unauthorized(new { error = "Unauthorized" });
+        if (body == null || string.IsNullOrWhiteSpace(body.mediaUrl) || string.IsNullOrWhiteSpace(body.SourcePostId))
+            return BadRequest(new { error = "mediaUrl and source_post_id are required" });
+
+        if (await _db.GalleryMedia.AnyAsync(g => g.SourcePostId == body.SourcePostId))
+            return Ok(new { created = false });
+
+        var media = new GalleryMedia
+        {
+            Id = Guid.NewGuid(),
+            Title = body.title ?? string.Empty,
+            Description = body.description,
+            MediaUrl = body.mediaUrl!,
+            MediaType = string.IsNullOrWhiteSpace(body.mediaType) ? "image" : body.mediaType!,
+            ThumbnailUrl = body.thumbnailUrl,
+            IsApproved = false, // stays out of the public approvedOnly:true query until an admin approves
+            SourcePostId = body.SourcePostId,
+            SourcePlatform = body.SourcePlatform,
+            UploadedAt = DateTime.UtcNow,
+        };
+        try
+        {
+            await _db.GalleryMedia.AddAsync(media);
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            return Ok(new { created = false }); // unique-index race on SourcePostId
+        }
+        return Created($"/api/ingest/gallery/{media.Id}", new { created = true, id = media.Id });
     }
 }

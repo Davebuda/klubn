@@ -69,7 +69,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("Email")
                         .IsUnique();
 
-                    b.ToTable("ApplicationUsers");
+                    b.ToTable("ApplicationUsers", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Badge", b =>
@@ -111,7 +111,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Badges");
+                    b.ToTable("Badges", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.ContactMessage", b =>
@@ -143,7 +143,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("ContactMessages");
+                    b.ToTable("ContactMessages", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.DJApplication", b =>
@@ -208,7 +208,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("DJApplications");
+                    b.ToTable("DJApplications", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.DJProfile", b =>
@@ -279,7 +279,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("UserId")
                         .IsUnique();
 
-                    b.ToTable("DJProfiles");
+                    b.ToTable("DJProfiles", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.DJReview", b =>
@@ -313,7 +313,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("DJReviews");
+                    b.ToTable("DJReviews", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.DJTop10", b =>
@@ -334,7 +334,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("SongId");
 
-                    b.ToTable("DJTop10s");
+                    b.ToTable("DJTop10s", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Event", b =>
@@ -375,7 +375,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("VenueId");
 
-                    b.ToTable("Events");
+                    b.ToTable("Events", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.EventDJ", b =>
@@ -390,7 +390,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("DJId");
 
-                    b.ToTable("EventDJ");
+                    b.ToTable("EventDJ", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.GalleryMedia", b =>
@@ -422,6 +422,12 @@ namespace Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SourcePlatform")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourcePostId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Tags")
                         .HasColumnType("TEXT");
 
@@ -447,7 +453,11 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("GalleryMedia");
+                    b.HasIndex("SourcePostId")
+                        .IsUnique()
+                        .HasFilter("\"SourcePostId\" IS NOT NULL");
+
+                    b.ToTable("GalleryMedia", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Genre", b =>
@@ -467,7 +477,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("DJProfileId");
 
-                    b.ToTable("Genres");
+                    b.ToTable("Genres", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.MediaComment", b =>
@@ -496,7 +506,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("MediaComments");
+                    b.ToTable("MediaComments", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.MediaItem", b =>
@@ -547,7 +557,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("MediaItems");
+                    b.ToTable("MediaItems", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.MediaLike", b =>
@@ -572,7 +582,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("MediaLikes");
+                    b.ToTable("MediaLikes", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Newsletter", b =>
@@ -596,7 +606,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Newsletters");
+                    b.ToTable("Newsletters", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Notification", b =>
@@ -627,7 +637,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Notifications");
+                    b.ToTable("Notifications", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Order", b =>
@@ -653,7 +663,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Orders");
+                    b.ToTable("Orders", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.OrderItem", b =>
@@ -680,7 +690,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("OrderId");
 
-                    b.ToTable("OrderItems");
+                    b.ToTable("OrderItems", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Payment", b =>
@@ -722,7 +732,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("PromotionCodeId");
 
-                    b.ToTable("Payments");
+                    b.ToTable("Payments", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.PriceRule", b =>
@@ -760,7 +770,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("EventId");
 
-                    b.ToTable("PriceRules");
+                    b.ToTable("PriceRules", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.PromotionCode", b =>
@@ -784,7 +794,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("PromotionCodes");
+                    b.ToTable("PromotionCodes", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.PushSubscription", b =>
@@ -819,7 +829,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("PushSubscriptions");
+                    b.ToTable("PushSubscriptions", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Review", b =>
@@ -856,7 +866,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Reviews");
+                    b.ToTable("Reviews", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Service", b =>
@@ -899,7 +909,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Services");
+                    b.ToTable("Services", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.ServiceBooking", b =>
@@ -940,7 +950,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("ServiceBookings");
+                    b.ToTable("ServiceBookings", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.ServiceReview", b =>
@@ -971,7 +981,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("ServiceReviews");
+                    b.ToTable("ServiceReviews", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.SiteSetting", b =>
@@ -1122,7 +1132,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("SiteSettings");
+                    b.ToTable("SiteSettings", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.SocialMediaLinks", b =>
@@ -1178,7 +1188,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("DJProfileId")
                         .IsUnique();
 
-                    b.ToTable("SocialMediaLinks");
+                    b.ToTable("SocialMediaLinks", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Song", b =>
@@ -1209,7 +1219,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Songs");
+                    b.ToTable("Songs", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Subscription", b =>
@@ -1250,7 +1260,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Subscriptions");
+                    b.ToTable("Subscriptions", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Ticket", b =>
@@ -1340,7 +1350,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("Tickets");
+                    b.ToTable("Tickets", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.UserBadge", b =>
@@ -1368,7 +1378,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("UserBadges");
+                    b.ToTable("UserBadges", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.UserFollowDJ", b =>
@@ -1389,7 +1399,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("DJId");
 
-                    b.ToTable("UserFollowDJs");
+                    b.ToTable("UserFollowDJs", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.UserPoints", b =>
@@ -1419,7 +1429,7 @@ namespace Infrastructure.Migrations
                     b.HasIndex("UserId")
                         .IsUnique();
 
-                    b.ToTable("UserPoints");
+                    b.ToTable("UserPoints", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Venue", b =>
@@ -1469,7 +1479,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Venues");
+                    b.ToTable("Venues", (string)null);
                 });
 
             modelBuilder.Entity("EventGenre", b =>
@@ -1484,7 +1494,7 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("GenresId");
 
-                    b.ToTable("EventGenre");
+                    b.ToTable("EventGenre", (string)null);
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.ContactMessage", b =>
