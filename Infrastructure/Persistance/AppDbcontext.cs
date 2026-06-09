@@ -29,6 +29,7 @@ namespace DJDiP.Infrastructure.Persistance
         public DbSet<Ticket> Tickets => Set<Ticket>();
         public DbSet<Venue> Venues => Set<Venue>();
         public DbSet<GalleryMedia> GalleryMedia => Set<GalleryMedia>();
+        public DbSet<EventHighlight> EventHighlights => Set<EventHighlight>();
         public DbSet<TicketType> TicketTypes => Set<TicketType>();
         public DbSet<TicketHold> TicketHolds => Set<TicketHold>();
         public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
@@ -227,6 +228,24 @@ namespace DJDiP.Infrastructure.Persistance
                 .HasIndex(w => new { w.Provider, w.ProviderPspReference, w.EventType })
                 .IsUnique();
 
+            // ========== HIGHLIGHTS / PREVIOUS MOMENTS — EventHighlight ==========
+            // Editorial recap of a PAST event. Two FKs to Event (recapped + optional
+            // upcoming rebook target) — configure BOTH explicitly with .WithMany() so EF
+            // doesn't infer a single ambiguous relationship. Restrict on both so an event
+            // in use can't be hard-deleted out from under a highlight.
+            modelBuilder.Entity<EventHighlight>(b =>
+            {
+                b.HasOne(h => h.Event)
+                    .WithMany()
+                    .HasForeignKey(h => h.EventId)
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                b.HasOne(h => h.UpcomingEvent)
+                    .WithMany()
+                    .HasForeignKey(h => h.UpcomingEventId)
+                    .OnDelete(DeleteBehavior.Restrict);
+            });
+
             // ========== PHASE 2-4 ENTITIES ==========
 
             // UserFollowDJ (Many-to-Many Join Table)
@@ -396,6 +415,10 @@ namespace DJDiP.Infrastructure.Persistance
                 .HasIndex(gm => gm.SourcePostId)
                 .IsUnique()
                 .HasFilter("\"SourcePostId\" IS NOT NULL");
+
+            // Landing carousel read path: published highlights ordered by SortOrder.
+            modelBuilder.Entity<EventHighlight>()
+                .HasIndex(h => new { h.IsPublished, h.SortOrder });
 
             base.OnModelCreating(modelBuilder);
         }

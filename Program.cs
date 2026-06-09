@@ -14,6 +14,7 @@ using DJDiP.Application.DTO.SiteSettingsDTO;
 using DJDiP.Application.DTO.PlaylistDTO;
 using DJDiP.Application.DTO.MixDTO;
 using DJDiP.Application.DTO.GalleryDTO;
+using DJDiP.Application.DTO.HighlightDTO;
 using DJDiP.Application.DTO.UserDTO;
 using DJDiP.Application.DTO.Auth;
 using DJDiP.Application.Interfaces;
@@ -168,6 +169,7 @@ builder.Services.AddScoped<ISongService, SongService>();
 builder.Services.AddScoped<IDJApplicationService, DJApplicationService>();
 builder.Services.AddScoped<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<IGalleryMediaService, GalleryMediaService>();
+builder.Services.AddScoped<IEventHighlightService, EventHighlightService>();
 builder.Services.AddScoped<IPlaylistService, PlaylistService>();
 builder.Services.AddScoped<IDJMixService, DJMixService>();
 builder.Services.AddHttpClient();
@@ -643,6 +645,26 @@ public class Query
         [Service] IGalleryMediaService galleryMediaService)
     {
         return await galleryMediaService.GetByUserAsync(userId);
+    }
+
+    // Highlights / Previous Moments — published editorial recaps for the landing carousel.
+    public async Task<IEnumerable<EventHighlightDto>> LandingHighlights(
+        [Service] IEventHighlightService highlightService,
+        int limit = 6)
+    {
+        return await highlightService.GetPublishedAsync(limit);
+    }
+
+    // All highlights (admin) — published + unpublished, for the curation console.
+    public async Task<IEnumerable<EventHighlightDto>> AllHighlights(
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        Mutation.RequireAdmin(httpContextAccessor);
+        var highlights = await highlightService.GetAllAsync();
+        return highlights
+            .OrderBy(h => h.SortOrder)
+            .ThenByDescending(h => h.HighlightDate);
     }
 
     // User profile query
@@ -2297,6 +2319,45 @@ public class Mutation
     {
         RequireCoAdmin(httpContextAccessor);
         return await galleryMediaService.DeleteAsync(id);
+    }
+
+    // HIGHLIGHTS / PREVIOUS MOMENTS MUTATIONS (admin curation)
+    public async Task<Guid> CreateEventHighlight(
+        CreateEventHighlightDto input,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.CreateAsync(input);
+    }
+
+    public async Task<bool> UpdateEventHighlight(
+        Guid id,
+        UpdateEventHighlightDto input,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.UpdateAsync(id, input);
+    }
+
+    public async Task<bool> SetHighlightPublished(
+        Guid id,
+        bool published,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.SetPublishedAsync(id, published);
+    }
+
+    public async Task<bool> DeleteEventHighlight(
+        Guid id,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.DeleteAsync(id);
     }
 
     public async Task<bool> LikeGalleryMedia(
