@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
 import { useQuery } from '@apollo/client';
 import { Link } from 'react-router-dom';
-import { GET_LANDING_DATA, HAS_PENDING_DJ_APPLICATION, GET_DJ_MIXES, GET_GENRES } from '../graphql/queries';
+import { GET_LANDING_DATA, HAS_PENDING_DJ_APPLICATION, GET_DJ_MIXES, GET_GENRES, GET_LANDING_HIGHLIGHTS } from '../graphql/queries';
 import { useAuth } from '../context/AuthContext';
 import NewsletterSignup from '../components/common/NewsletterSignup';
 import GallerySlideshow from '../components/gallery/GallerySlideshow';
@@ -294,6 +295,122 @@ const CountUpStat = ({ target, label }: { target: number | string; label: string
       <p ref={ref as React.RefObject<HTMLParagraphElement>} className="text-3xl font-bold text-white">{value}</p>
       <p className="text-xs text-gray-500">{label}</p>
     </div>
+  );
+};
+
+type HighlightMedia = {
+  id: string;
+  mediaUrl: string;
+  mediaType: string;
+  thumbnailUrl?: string | null;
+};
+
+type Highlight = {
+  id: string;
+  title: string;
+  blurb?: string | null;
+  coverImageUrl: string;
+  coverVideoUrl?: string | null;
+  highlightDate: string;
+  eventId: string;
+  eventTitle?: string | null;
+  upcomingEventId?: string | null;
+  upcomingEventTitle?: string | null;
+  media: HighlightMedia[];
+};
+
+// Highlights / Previous Moments — horizontal recap carousel of past nights.
+// Renders nothing when there are no published highlights.
+const HighlightsCarousel = () => {
+  const { data } = useQuery(GET_LANDING_HIGHLIGHTS);
+  const highlights: Highlight[] = data?.landingHighlights ?? [];
+
+  if (highlights.length === 0) return null;
+
+  return (
+    <section className="max-w-7xl mx-auto px-6 lg:px-8 pt-20 pb-10">
+      <ScrollReveal>
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-orange-500">Previous Moments</p>
+            <h2 className="text-3xl lg:text-5xl font-black tracking-tight">
+              Relive the{' '}
+              <span className="shimmer-text bg-gradient-to-r from-orange-400 to-[#FF6B35] bg-clip-text text-transparent">Nights.</span>
+            </h2>
+          </div>
+        </div>
+      </ScrollReveal>
+
+      <div className="-mx-6 px-6 lg:-mx-8 lg:px-8 overflow-x-auto scroll-smooth snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex gap-4 pb-2">
+          {highlights.map((h, i) => (
+            <motion.article
+              key={h.id}
+              initial={{ opacity: 0, y: 30 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, margin: '-60px' }}
+              transition={{ duration: 0.5, delay: i * 0.08, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className="snap-start shrink-0 w-[85vw] sm:w-[28rem] lg:w-[32rem]"
+            >
+              <div className="liquid-glass group relative flex h-full flex-col rounded-3xl border border-white/[0.10] bg-gradient-to-b from-white/[0.12] to-white/[0.03] shadow-[inset_0_1px_0_rgba(255,255,255,0.15),_0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden">
+                <div className="relative aspect-[16/9] overflow-hidden bg-[#0a0a0a]">
+                  {h.coverVideoUrl ? (
+                    <video
+                      src={h.coverVideoUrl}
+                      poster={h.coverImageUrl || undefined}
+                      muted
+                      autoPlay
+                      loop
+                      playsInline
+                      className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
+                    />
+                  ) : (
+                    <img
+                      src={h.coverImageUrl}
+                      alt={h.title}
+                      loading="lazy"
+                      className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
+                    />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                  <span className="absolute top-4 left-4 z-10 px-2.5 py-1 rounded-md bg-orange-500/20 border border-orange-500/30 text-[0.65rem] font-bold text-orange-300 uppercase tracking-wide">
+                    {new Date(h.highlightDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                </div>
+
+                <div className="flex flex-1 flex-col gap-3 p-6">
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-black text-white leading-tight">{h.title}</h3>
+                    {h.eventTitle && (
+                      <p className="text-[0.7rem] uppercase tracking-wide text-gray-400">{h.eventTitle}</p>
+                    )}
+                  </div>
+                  {h.blurb && (
+                    <p className="text-sm text-gray-300/80 leading-relaxed line-clamp-3">{h.blurb}</p>
+                  )}
+                  <div className="mt-auto flex flex-wrap items-center gap-3 pt-2">
+                    <Link
+                      to={`/events/${h.eventId}`}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-orange-400 hover:text-orange-300 transition-colors"
+                    >
+                      Relive →
+                    </Link>
+                    {h.upcomingEventId && (
+                      <Link
+                        to={`/events/${h.upcomingEventId}`}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-4 py-1.5 text-xs font-semibold text-white/90 hover:border-orange-400/40 hover:bg-white/[0.10] transition-colors"
+                      >
+                        Next: {h.upcomingEventTitle ?? 'Upcoming'} →
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.article>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 };
 
@@ -668,6 +785,9 @@ const LandingPage = () => {
 
       {/* ─── Frequency Spectrum ─── */}
       <FrequencySpectrum theme="gradient" intensity="low" />
+
+      {/* ─── Highlights / Previous Moments ─── */}
+      <HighlightsCarousel />
 
       {/* ─── Featured DJs Intro ─── */}
       <section className="max-w-7xl mx-auto px-6 lg:px-8 pt-20 pb-10">
