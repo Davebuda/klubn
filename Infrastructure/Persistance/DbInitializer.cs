@@ -89,6 +89,59 @@ namespace DJDiP.Infrastructure.Persistance
             }
             catch { /* columns already exist or table doesn't exist yet (handled by EnsureCreated) */ }
 
+            // ── DEV CONVENIENCE: EventHighlights table + one sample published highlight ──
+            // Runtime uses EnsureCreated (not migrations), so a newly-added table is NOT created
+            // on an already-existing database. Create it and seed one published highlight so the
+            // landing "Previous Moments" section is visible in development. Runs BEFORE the
+            // "already seeded" early-return so it applies to existing dev databases.
+            // Production must apply the EF migration `AddEventHighlights` instead (Postgres typing).
+            if (string.Equals(
+                    Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+                    "Development", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(
+                        @"CREATE TABLE IF NOT EXISTS ""EventHighlights"" (
+                            ""Id"" TEXT PRIMARY KEY,
+                            ""EventId"" TEXT NOT NULL,
+                            ""Title"" TEXT NOT NULL DEFAULT '',
+                            ""Blurb"" TEXT,
+                            ""CoverImageUrl"" TEXT NOT NULL DEFAULT '',
+                            ""CoverVideoUrl"" TEXT,
+                            ""HighlightDate"" TEXT,
+                            ""UpcomingEventId"" TEXT,
+                            ""IsPublished"" INTEGER NOT NULL DEFAULT 0,
+                            ""SortOrder"" INTEGER NOT NULL DEFAULT 0,
+                            ""CreatedAt"" TEXT
+                          );");
+
+                    if (await context.Events.AnyAsync() && !await context.EventHighlights.AnyAsync())
+                    {
+                        var ev = await context.Events
+                            .OrderByDescending(e => e.Date)
+                            .FirstAsync();
+
+                        context.EventHighlights.Add(new EventHighlight
+                        {
+                            Id = Guid.NewGuid(),
+                            EventId = ev.Id,
+                            Title = "Opening Night — Recap",
+                            Blurb = "A first look back at the night. Demo highlight — edit or remove it in Admin → Highlights.",
+                            CoverImageUrl = string.IsNullOrWhiteSpace(ev.ImageUrl)
+                                ? "/media/defaults/event.jpg"
+                                : ev.ImageUrl,
+                            HighlightDate = ev.Date,
+                            IsPublished = true,
+                            SortOrder = 0,
+                            CreatedAt = DateTime.UtcNow
+                        });
+                        await context.SaveChangesAsync();
+                    }
+                }
+                catch { /* table already exists or non-SQLite provider — safe to ignore in dev */ }
+            }
+
             // Check if data already exists
             if (await context.SiteSettings.AnyAsync())
             {
@@ -234,6 +287,30 @@ namespace DJDiP.Infrastructure.Persistance
 
             await context.Events.AddAsync(sampleEvent);
             await context.SaveChangesAsync();
+
+            // Dev: seed one published highlight for the sample event so the landing
+            // "Previous Moments" section is visible on a freshly-created database.
+            if (string.Equals(
+                    Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT"),
+                    "Development", StringComparison.OrdinalIgnoreCase)
+                && !await context.EventHighlights.AnyAsync())
+            {
+                context.EventHighlights.Add(new EventHighlight
+                {
+                    Id = Guid.NewGuid(),
+                    EventId = sampleEvent.Id,
+                    Title = "Opening Night — Recap",
+                    Blurb = "A first look back at the night. Demo highlight — edit or remove it in Admin → Highlights.",
+                    CoverImageUrl = string.IsNullOrWhiteSpace(sampleEvent.ImageUrl)
+                        ? "/media/defaults/event.jpg"
+                        : sampleEvent.ImageUrl,
+                    HighlightDate = sampleEvent.Date,
+                    IsPublished = true,
+                    SortOrder = 0,
+                    CreatedAt = DateTime.UtcNow
+                });
+                await context.SaveChangesAsync();
+            }
         }
     }
 }
