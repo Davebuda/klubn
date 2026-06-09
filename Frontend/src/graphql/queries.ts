@@ -72,6 +72,73 @@ export const GET_LANDING_DATA = gql`
   }
 `;
 
+export const GET_LANDING_HIGHLIGHTS = gql`
+  query GetLandingHighlights {
+    landingHighlights(limit: 6) {
+      id
+      title
+      blurb
+      coverImageUrl
+      coverVideoUrl
+      highlightDate
+      eventId
+      eventTitle
+      upcomingEventId
+      upcomingEventTitle
+      media {
+        id
+        mediaUrl
+        mediaType
+        thumbnailUrl
+      }
+    }
+  }
+`;
+
+export const ALL_HIGHLIGHTS = gql`
+  query AllHighlights {
+    allHighlights {
+      id
+      eventId
+      eventTitle
+      eventDate
+      title
+      blurb
+      coverImageUrl
+      coverVideoUrl
+      highlightDate
+      upcomingEventId
+      upcomingEventTitle
+      isPublished
+      sortOrder
+    }
+  }
+`;
+
+export const CREATE_EVENT_HIGHLIGHT = gql`
+  mutation CreateEventHighlight($input: CreateEventHighlightDtoInput!) {
+    createEventHighlight(input: $input)
+  }
+`;
+
+export const UPDATE_EVENT_HIGHLIGHT = gql`
+  mutation UpdateEventHighlight($id: UUID!, $input: UpdateEventHighlightDtoInput!) {
+    updateEventHighlight(id: $id, input: $input)
+  }
+`;
+
+export const SET_HIGHLIGHT_PUBLISHED = gql`
+  mutation SetHighlightPublished($id: UUID!, $published: Boolean!) {
+    setHighlightPublished(id: $id, published: $published)
+  }
+`;
+
+export const DELETE_EVENT_HIGHLIGHT = gql`
+  mutation DeleteEventHighlight($id: UUID!) {
+    deleteEventHighlight(id: $id)
+  }
+`;
+
 export const GET_DJS = gql`
   query GetDJs {
     dJs {

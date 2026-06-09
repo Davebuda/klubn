@@ -29,6 +29,7 @@ namespace DJDiP.Infrastructure.Persistance
         private IUserFollowDJRepository? _userFollowDJs;
         private IRepository<SiteSetting>? _siteSettings;
         private IRepository<GalleryMedia>? _galleryMedia;
+        private IRepository<EventHighlight>? _eventHighlights;
         private IRepository<DJReview>? _djReviews;
         private IDJApplicationRepository? _djApplications;
         private IRepository<Playlist>? _playlists;
@@ -59,6 +60,7 @@ namespace DJDiP.Infrastructure.Persistance
         public IUserFollowDJRepository UserFollowDJs => _userFollowDJs ??= new UserFollowDJRepository(_context);
         public IRepository<SiteSetting> SiteSettings => _siteSettings ??= new Repository<SiteSetting>(_context);
         public IRepository<GalleryMedia> GalleryMedia => _galleryMedia ??= new Repository<GalleryMedia>(_context);
+        public IRepository<EventHighlight> EventHighlights => _eventHighlights ??= new Repository<EventHighlight>(_context);
         public IRepository<DJReview> DJReviews => _djReviews ??= new Repository<DJReview>(_context);
         public IDJApplicationRepository DJApplications => _djApplications ??= new DJApplicationRepository(_context);
         public IRepository<Playlist> Playlists => _playlists ??= new Repository<Playlist>(_context);

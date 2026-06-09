@@ -23,6 +23,7 @@ namespace DJDiP.Application.Interfaces
         IUserFollowDJRepository UserFollowDJs { get; }
         IRepository<SiteSetting> SiteSettings { get; }
         IRepository<GalleryMedia> GalleryMedia { get; }
+        IRepository<EventHighlight> EventHighlights { get; }
         IRepository<DJReview> DJReviews { get; }
         IDJApplicationRepository DJApplications { get; }
         IRepository<Playlist> Playlists { get; }

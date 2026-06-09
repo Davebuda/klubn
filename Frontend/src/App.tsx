@@ -35,6 +35,7 @@ import AdminPlaylistsPage from './pages/admin/AdminPlaylistsPage';
 import AdminTicketsPage from './pages/admin/AdminTicketsPage';
 import AdminSiteSettingsPage from './pages/admin/AdminSiteSettingsPage';
 import AdminGalleryPage from './pages/admin/AdminGalleryPage';
+import AdminHighlightsPage from './pages/admin/AdminHighlightsPage';
 import AdminGenresPage from './pages/admin/AdminGenresPage';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
 import AdminNewsletterPage from './pages/admin/AdminNewsletterPage';
@@ -178,6 +179,7 @@ const App = () => (
       <Route path="playlists" element={<AdminPlaylistsPage />} />
       <Route path="mixes" element={<AdminMixesPage />} />
       <Route path="gallery" element={<AdminGalleryPage />} />
+      <Route path="highlights" element={<AdminHighlightsPage />} />
       <Route path="genres" element={<AdminGenresPage />} />
       <Route path="users" element={<AdminUsersPage />} />
       <Route path="newsletter" element={<AdminNewsletterPage />} />
@@ -204,6 +206,7 @@ const App = () => (
       <Route path="mixes" element={<AdminMixesPage />} />
       <Route path="playlists" element={<AdminPlaylistsPage />} />
       <Route path="gallery" element={<AdminGalleryPage />} />
+      <Route path="highlights" element={<AdminHighlightsPage />} />
       <Route path="venues" element={<AdminVenuesPage />} />
     </Route>
   </Routes>

@@ -85,6 +85,19 @@ namespace DJDiP.Infrastructure.Persistance
                         ""ReviewedAt"" TIMESTAMP,
                         ""ReviewedByAdminId"" TEXT,
                         ""RejectionReason"" TEXT
+                      );
+                      CREATE TABLE IF NOT EXISTS ""EventHighlights"" (
+                        ""Id"" UUID PRIMARY KEY,
+                        ""EventId"" UUID NOT NULL REFERENCES ""Events""(""Id"") ON DELETE CASCADE,
+                        ""Title"" TEXT NOT NULL DEFAULT '',
+                        ""Blurb"" TEXT,
+                        ""CoverImageUrl"" TEXT NOT NULL DEFAULT '',
+                        ""CoverVideoUrl"" TEXT,
+                        ""HighlightDate"" TIMESTAMP NOT NULL DEFAULT NOW(),
+                        ""UpcomingEventId"" UUID REFERENCES ""Events""(""Id"") ON DELETE SET NULL,
+                        ""IsPublished"" BOOLEAN NOT NULL DEFAULT FALSE,
+                        ""SortOrder"" INTEGER NOT NULL DEFAULT 0,
+                        ""CreatedAt"" TIMESTAMP NOT NULL DEFAULT NOW()
                       );");
             }
             catch { /* columns already exist or table doesn't exist yet (handled by EnsureCreated) */ }
