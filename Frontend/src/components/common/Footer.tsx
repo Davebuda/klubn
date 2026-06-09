@@ -40,6 +40,12 @@ const Footer = () => {
             <a href="/contact" className="hover:text-white transition">
               Contact
             </a>
+            <a href="/terms" className="hover:text-white transition">
+              Terms of Sale
+            </a>
+            <a href="/privacy" className="hover:text-white transition">
+              Privacy
+            </a>
           </div>
         </div>
 
@@ -76,9 +82,15 @@ const Footer = () => {
         </div>
       </div>
 
-      <div className="mt-10 border-t border-white/5 pt-6 text-center text-xs tracking-[0.4em] text-gray-500">
-        {siteSettings.copyrightText ||
-          `© ${new Date().getFullYear()} ${siteSettings.siteName}. Crafted for the culture.`}
+      <div className="mt-10 border-t border-white/5 pt-6 text-center text-xs text-gray-500 space-y-3">
+        <p className="text-gray-500">
+          DJ DIP AV BUKENYA · Org. nr 933 809 048 · St. Edmunds Vei 39D, 0280 Oslo, Norway ·{' '}
+          <a href="mailto:tickets@klubn.no" className="hover:text-white transition">tickets@klubn.no</a> · +47 967 36 112
+        </p>
+        <p className="tracking-[0.4em]">
+          {siteSettings.copyrightText ||
+            `© ${new Date().getFullYear()} ${siteSettings.siteName}. Crafted for the culture.`}
+        </p>
       </div>
     </footer>
   );

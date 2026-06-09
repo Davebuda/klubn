@@ -11,6 +11,8 @@ import EventDetailPage from './pages/EventDetailPage';
 import DJsPage from './pages/DJsPage';
 import DJProfilePage from './pages/DJProfilePage';
 import ContactPage from './pages/ContactPage';
+import TermsPage from './pages/TermsPage';
+import PrivacyPage from './pages/PrivacyPage';
 import DashboardPage from './pages/DashboardPage';
 import TicketsPage from './pages/TicketsPage';
 import OrdersPage from './pages/OrdersPage';
@@ -84,6 +86,8 @@ const App = () => (
         }
       />
       <Route path="contact" element={<ContactPage />} />
+      <Route path="terms" element={<TermsPage />} />
+      <Route path="privacy" element={<PrivacyPage />} />
       <Route
         path="dashboard"
         element={
