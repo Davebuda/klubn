@@ -52,6 +52,8 @@ import DJPlaylistsManager from './pages/dj/DJPlaylistsManager';
 import DJMixesManager from './pages/dj/DJMixesManager';
 import MixesPage from './pages/MixesPage';
 import AdminMixesPage from './pages/admin/AdminMixesPage';
+import EventTicketsPage from './pages/EventTicketsPage';
+import CheckoutReturnPage from './pages/CheckoutReturnPage';
 import OrganizerLayout from './components/layouts/OrganizerLayout';
 import OrganizerApplyPage from './pages/organizer/OrganizerApplyPage';
 import OrganizerDashboard from './pages/organizer/OrganizerDashboard';
@@ -63,6 +65,8 @@ const App = () => (
       <Route index element={<LandingPage />} />
       <Route path="events" element={<EventsPage />} />
       <Route path="events/:id" element={<EventDetailPage />} />
+      <Route path="events/:id/tickets" element={<EventTicketsPage />} />
+      <Route path="checkout/return" element={<CheckoutReturnPage />} />
       <Route path="djs" element={<DJsPage />} />
       <Route path="djs/:id" element={<DJProfilePage />} />
       <Route
