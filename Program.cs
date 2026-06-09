@@ -172,17 +172,37 @@ builder.Services.AddScoped<IPlaylistService, PlaylistService>();
 builder.Services.AddScoped<IDJMixService, DJMixService>();
 builder.Services.AddHttpClient();
 
-// ========== PAYMENT SEAM (P3 — provider-agnostic) ==========
-// Bind Vipps config (plumbing only; real values arrive with P4 TEST creds).
+// ========== PAYMENT SEAM (provider-agnostic) ==========
+// Bind config: Vipps (plumbing only, real values arrive with P4 TEST creds), Sandbox
+// (the no-creds E2E provider), Ticketing (orchestration knobs), Qr (token signing).
 builder.Services.Configure<DJDiP.Infrastructure.Payments.Vipps.VippsOptions>(
     builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Vipps.VippsOptions.SectionName));
-// Stubs keep the DI graph valid until P4 (provider) / P5-P6 (orchestrator).
-// P4 replaces the provider with a typed-HttpClient VippsPaymentProvider registered
-// by Name ("Vipps") so the P6 webhook can dispatch on the {provider} route segment.
-builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
-    DJDiP.Infrastructure.Payments.NotConfiguredPaymentProvider>();
+builder.Services.Configure<DJDiP.Infrastructure.Payments.Sandbox.SandboxOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Sandbox.SandboxOptions.SectionName));
+builder.Services.Configure<DJDiP.Infrastructure.Payments.TicketingOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.TicketingOptions.SectionName));
+builder.Services.Configure<DJDiP.Application.Services.QrOptions>(
+    builder.Configuration.GetSection(DJDiP.Application.Services.QrOptions.SectionName));
+
+// QR door-scan token signing (pure HMAC, provider-agnostic).
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IQrTokenService,
+    DJDiP.Application.Services.QrTokenService>();
+
+// Active payment provider, selected by config "Payments:Provider" (default Sandbox).
+// Sandbox runs the full checkout->capture->issue->QR flow with NO Vipps creds. When
+// the Vipps adapter lands (P4) it registers by Name ("Vipps") and this becomes a
+// one-line swap — the orchestrator and domain do not change.
+var activeProvider = builder.Configuration["Payments:Provider"] ?? "Sandbox";
+if (activeProvider.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+        DJDiP.Infrastructure.Payments.NotConfiguredPaymentProvider>(); // until P4 Vipps adapter
+else
+    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+        DJDiP.Infrastructure.Payments.Sandbox.SandboxPaymentProvider>();
+
+// Real orchestration lives in Infrastructure (EF access) — NOT Application.
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentOrchestrator,
-    DJDiP.Infrastructure.Payments.NotConfiguredPaymentOrchestrator>();
+    DJDiP.Infrastructure.Payments.PaymentOrchestrator>();
 builder.Services.AddScoped<IFileUploadService>(sp =>
 {
     var env = sp.GetRequiredService<IWebHostEnvironment>();
@@ -345,6 +365,56 @@ finally
 
 public class Query
 {
+    // ===== Ticketing — provider-agnostic checkout reads (design §6) =====
+
+    // Live ticket tiers for an event (drafts hidden). Available is computed, never stored.
+    public async Task<IReadOnlyList<DJDiP.Application.DTO.PaymentDTO.TicketTypeAvailabilityDto>> TicketTypes(
+        Guid eventId,
+        [Service] AppDbContext db)
+    {
+        var types = await db.TicketTypes
+            .Where(t => t.EventId == eventId && t.Status != TicketTypeStatus.Draft)
+            .OrderBy(t => t.SortOrder)
+            .ToListAsync();
+
+        return types.Select(t => new DJDiP.Application.DTO.PaymentDTO.TicketTypeAvailabilityDto
+        {
+            Id = t.Id,
+            Name = t.Name,
+            Description = t.Description,
+            PriceMinor = t.PriceMinor,
+            VatRate = t.VATRate,
+            Currency = t.Currency,
+            AdmitCount = t.AdmitCount,
+            MinPerOrder = t.MinPerOrder,
+            MaxPerOrder = t.MaxPerOrder,
+            Available = Math.Max(0, t.Capacity - t.QuantitySold - t.QuantityHeld),
+            Status = t.Status.ToString(),
+            SortOrder = t.SortOrder
+        }).ToList();
+    }
+
+    // Order/payment status by merchant reference (checkout-return polling).
+    public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto?> TicketOrder(
+        string reference,
+        [Service] AppDbContext db)
+    {
+        var payment = await db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == reference);
+        if (payment is null) return null;
+
+        var order = await db.Orders.FirstOrDefaultAsync(o => o.Id == payment.OrderId);
+        var totalMinor = payment.CapturedAmountMinor > 0
+            ? payment.CapturedAmountMinor
+            : (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+
+        return new DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto(
+            reference,
+            order?.Status.ToString() ?? "Unknown",
+            payment.Status.ToString(),
+            totalMinor,
+            payment.Currency);
+    }
+
     // Landing page: upcoming events and featured DJs
     public async Task<LandingPageData> Landing(
         [Service] IEventService events,
@@ -868,6 +938,77 @@ public class LandingPageData
 
 public class Mutation
 {
+    // ===== Ticketing — provider-agnostic checkout (design §6) =====
+
+    // Create an order, reserve inventory (oversell-safe), and start the payment.
+    // Server resolves all prices from TicketType — client amounts are never trusted.
+    public async Task<DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload> CreateTicketOrder(
+        DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderInput input,
+        [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
+        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
+        [Service] IHttpContextAccessor accessor)
+    {
+        var userId = RequireAuthentication(accessor);
+        var lines = (input.Lines ?? new List<DJDiP.Application.DTO.PaymentDTO.OrderLineInput>())
+            .Select(l => new DJDiP.Application.DTO.PaymentDTO.OrderLineRequest(l.TicketTypeId, l.Quantity))
+            .ToList();
+        try
+        {
+            var result = await orchestrator.CreatePaymentAsync(
+                input.EventId, lines, input.CustomerEmail, userId, default);
+            return new DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload(
+                result.Order, result.RedirectUrl, provider.Name);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new GraphQLException(ex.Message);
+        }
+    }
+
+    // DEV-ONLY end-to-end completion for the Sandbox provider: drives the exact same
+    // idempotent FinalizeAsync(Captured) path a real provider webhook would. Refuses to
+    // run under any non-Sandbox provider.
+    public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto> CompleteSandboxPayment(
+        string reference,
+        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
+        [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor accessor)
+    {
+        if (!provider.Name.Equals("Sandbox", StringComparison.OrdinalIgnoreCase))
+            throw new GraphQLException("Sandbox completion is only available with the Sandbox provider.");
+
+        // Auth-gated: a caller may only complete their OWN order, even in sandbox.
+        var userId = RequireAuthentication(accessor);
+
+        var payment = await db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == reference);
+        if (payment is null) throw new GraphQLException("Order not found.");
+
+        var owner = await db.Orders.Where(o => o.Id == payment.OrderId).Select(o => o.UserId).FirstOrDefaultAsync();
+        if (owner != userId)
+            throw new GraphQLException("You can only complete your own order.");
+
+        var amountMinor = (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+        var ev = new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+            OrderRef: reference,
+            PspRef: "sbx-psp-" + reference,
+            Type: DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured,
+            Amount: new DJDiP.Application.DTO.PaymentDTO.Money(amountMinor, payment.Currency),
+            OccurredAt: DateTime.UtcNow,
+            RawPayload: "{\"sandbox\":true}");
+
+        await orchestrator.FinalizeAsync(ev, default);
+
+        await db.Entry(payment).ReloadAsync();
+        var order = await db.Orders.FirstOrDefaultAsync(o => o.Id == payment.OrderId);
+        return new DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto(
+            reference,
+            order?.Status.ToString() ?? "Unknown",
+            payment.Status.ToString(),
+            payment.CapturedAmountMinor > 0 ? payment.CapturedAmountMinor : amountMinor,
+            payment.Currency);
+    }
+
     // ========== AUTH HELPERS ==========
     // internal so the Query class (and other resolver types) can reuse the same
     // JWT-claim-based guards. P0-T1/P0-T3: identity is always derived from the
