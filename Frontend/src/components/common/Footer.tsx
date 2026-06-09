@@ -1,4 +1,5 @@
 import { useSiteSettings } from '../../context/SiteSettingsContext';
+import { isRealSocialUrl } from '../../utils/social';
 
 const Footer = () => {
   const { siteSettings } = useSiteSettings();
@@ -9,11 +10,12 @@ const Footer = () => {
 
   const socialLinks = [
     { label: 'Instagram', url: siteSettings.instagramUrl },
+    { label: 'Facebook', url: siteSettings.facebookUrl },
     { label: 'Twitter', url: siteSettings.twitterUrl },
     { label: 'YouTube', url: siteSettings.youTubeUrl },
     { label: 'TikTok', url: siteSettings.tikTokUrl },
     { label: 'SoundCloud', url: siteSettings.soundCloudUrl },
-  ].filter((item) => Boolean(item.url));
+  ].filter((item) => isRealSocialUrl(item.url));
 
   return (
     <footer className="relative z-10 mt-24 w-full max-w-full border-t border-white/10 bg-gradient-to-b from-white/[0.03] to-transparent py-14 text-sm text-gray-400">
