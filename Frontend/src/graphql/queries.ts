@@ -869,25 +869,6 @@ export const UPDATE_USER_PROFILE = gql`
   }
 `;
 
-export const CREATE_EVENT_PAYMENT_INTENT = gql`
-  mutation CreateEventPaymentIntent($eventId: String!, $userId: String!, $email: String!) {
-    createEventPaymentIntent(eventId: $eventId, userId: $userId, email: $email) {
-      clientSecret
-      paymentIntentId
-    }
-  }
-`;
-
-export const CONFIRM_STRIPE_PAYMENT = gql`
-  mutation ConfirmStripePaymentAndIssueTicket($paymentIntentId: String!, $eventId: String!, $userId: String!, $email: String!) {
-    confirmStripePaymentAndIssueTicket(paymentIntentId: $paymentIntentId, eventId: $eventId, userId: $userId, email: $email) {
-      id
-      ticketCode
-      status
-    }
-  }
-`;
-
 // DJ REVIEW QUERIES & MUTATIONS
 export const GET_DJ_REVIEWS = gql`
   query GetDJReviews($djId: UUID!) {

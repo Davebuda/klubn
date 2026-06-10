@@ -63,4 +63,4 @@ Built as static assets, served behind Traefik (see root `docker-compose.yml` `fr
 ## Dependencies (from `package.json`)
 React 18.2 · `@apollo/client` 3.9 · `graphql` 16.8 · `react-router-dom` 6.20 · `zustand` 4.4 ·
 `framer-motion` 12 · `@heroicons/react` 2 · `lucide-react` · `react-helmet-async` 3 ·
-`@stripe/react-stripe-js` 2.8 / `@stripe/stripe-js` 2.4 · Tailwind 3.4 · Vite 4 · TypeScript 5.2.
+Tailwind 3.4 · Vite 4 · TypeScript 5.2. (No Stripe SDK — payments are hosted redirects via the backend seam.)

@@ -12,8 +12,6 @@
   "dependencies": {
     "@apollo/client": "^3.9.11",
     "@heroicons/react": "^2.0.18",
-    "@stripe/react-stripe-js": "^2.8.1",
-    "@stripe/stripe-js": "^2.4.0",
     "framer-motion": "^12.34.3",
     "graphql": "^16.8.1",
     "html5-qrcode": "^2.3.8",
