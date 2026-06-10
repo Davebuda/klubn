@@ -1129,6 +1129,87 @@ public class Mutation
             payment.Currency);
     }
 
+    // P7 door-scan redemption (design §7) — replaces the legacy CheckInTicketAsync flow.
+    // Token is verified (constant-time HMAC + expiry) BEFORE the DB is touched; the
+    // single-use guarantee is the atomic conditional UPDATE on the Ticket row, so two
+    // scanners racing the same QR can never both admit. Group tickets ("Table-for-4"):
+    // omitting `admits` redeems everything remaining in one scan (D4 default); passing
+    // admits=N supports wave entry — the ticket stays Active while admits remain.
+    // Holder name comes from a server lookup AFTER validation, never from the QR.
+    public async Task<RedeemTicketPayload> RedeemTicket(
+        string token,
+        int? admits,
+        [Service] DJDiP.Application.Interfaces.IQrTokenService qr,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor accessor)
+    {
+        RequireCoAdmin(accessor); // door staff / scanner role
+
+        var verify = qr.Verify(token);
+        if (verify.Status is DJDiP.Application.Interfaces.QrVerifyStatus.BadFormat
+                          or DJDiP.Application.Interfaces.QrVerifyStatus.BadSignature)
+            throw new GraphQLException("Invalid ticket.");
+        if (verify.Status == DJDiP.Application.Interfaces.QrVerifyStatus.Expired)
+            throw new GraphQLException("Ticket has expired.");
+
+        var data = verify.Data!;
+        var ticket = await db.Tickets.FirstOrDefaultAsync(t => t.Id == data.TicketId);
+        if (ticket is null || ticket.EventId != data.EventId)
+            throw new GraphQLException("Invalid ticket.");
+
+        // Advisory pre-checks for a precise scanner message — the atomic UPDATE below
+        // remains the actual single-use guard under racing scanners.
+        if (ticket.Status == TicketStatus.Used || ticket.IsUsed || ticket.AdmitsRemaining <= 0)
+            throw new GraphQLException("Ticket already used.");
+
+        var admitNow = admits ?? ticket.AdmitsRemaining; // default: single scan admits all
+        if (admitNow < 1)
+            throw new GraphQLException("Admit count must be at least 1.");
+
+        var now = DateTime.UtcNow;
+
+        // Atomic single-use claim (works on SQLite dev + PostgreSQL prod; booleans and
+        // enums passed as parameters so each provider maps them natively). 0 rows
+        // affected ⇒ already used / not active / not enough admits left — never admit.
+        var claimed = await db.Database.ExecuteSqlInterpolatedAsync(
+            $@"UPDATE ""Tickets""
+               SET ""AdmitsRemaining"" = ""AdmitsRemaining"" - {admitNow},
+                   ""RedeemedAt""  = COALESCE(""RedeemedAt"", {now}),
+                   ""CheckInTime"" = COALESCE(""CheckInTime"", {now}),
+                   ""Status"" = CASE WHEN ""AdmitsRemaining"" - {admitNow} <= 0
+                                     THEN {(int)TicketStatus.Used} ELSE ""Status"" END,
+                   ""IsUsed"" = CASE WHEN ""AdmitsRemaining"" - {admitNow} <= 0
+                                     THEN {true} ELSE ""IsUsed"" END
+               WHERE ""Id"" = {ticket.Id}
+                 AND ""Status"" = {(int)TicketStatus.Active}
+                 AND ""IsValid"" = {true}
+                 AND ""AdmitsRemaining"" >= {admitNow}");
+
+        if (claimed != 1)
+        {
+            await db.Entry(ticket).ReloadAsync();
+            if (ticket.Status == TicketStatus.Used || ticket.IsUsed)
+                throw new GraphQLException("Ticket already used.");
+            if (ticket.Status != TicketStatus.Active || !ticket.IsValid)
+                throw new GraphQLException($"Ticket is not valid for entry ({ticket.Status}).");
+            throw new GraphQLException($"Only {ticket.AdmitsRemaining} admit(s) remaining on this ticket.");
+        }
+
+        await db.Entry(ticket).ReloadAsync();
+        var eventTitle = await db.Events.Where(e => e.Id == ticket.EventId)
+            .Select(e => e.Title).FirstOrDefaultAsync() ?? "Unknown event";
+        var holderName = await db.ApplicationUsers.Where(u => u.Id == ticket.UserId)
+            .Select(u => u.FullName).FirstOrDefaultAsync();
+
+        return new RedeemTicketPayload(
+            TicketNumber: ticket.TicketNumber,
+            EventTitle: eventTitle,
+            HolderName: holderName,
+            AdmittedNow: admitNow,
+            AdmitsRemaining: ticket.AdmitsRemaining,
+            RedeemedAt: ticket.RedeemedAt ?? now);
+    }
+
     // ========== AUTH HELPERS ==========
     // internal so the Query class (and other resolver types) can reuse the same
     // JWT-claim-based guards. P0-T1/P0-T3: identity is always derived from the
@@ -2983,6 +3064,16 @@ public class TransferTicketInput
     public string ToUserId { get; set; } = string.Empty;
     public string ToEmail { get; set; } = string.Empty;
 }
+
+// P7 door-scan redemption result — what the scanner UI shows after a valid scan.
+// HolderName is a post-validation server lookup (design §7: never read from the QR).
+public sealed record RedeemTicketPayload(
+    string TicketNumber,
+    string EventTitle,
+    string? HolderName,
+    int AdmittedNow,
+    int AdmitsRemaining,
+    DateTime RedeemedAt);
 
 // ===== Ticket type (tier) admin CRUD inputs (P1-T3) — money in minor units (øre) =====
 public class CreateTicketTypeInput
