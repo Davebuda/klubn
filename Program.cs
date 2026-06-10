@@ -218,6 +218,10 @@ else
 // Real orchestration lives in Infrastructure (EF access) — NOT Application.
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentOrchestrator,
     DJDiP.Infrastructure.Payments.PaymentOrchestrator>();
+
+// Releases expired inventory holds from abandoned checkouts (architecture §2).
+// Only sweeps payments still in Created state — never races an in-flight capture.
+builder.Services.AddHostedService<DJDiP.Infrastructure.Payments.TicketHoldSweeper>();
 builder.Services.AddScoped<IFileUploadService>(sp =>
 {
     var env = sp.GetRequiredService<IWebHostEnvironment>();

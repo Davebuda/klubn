@@ -16,5 +16,12 @@ namespace DJDiP.Infrastructure.Payments
         // QR tokens expire this many hours after the event's start (design §7 — tokens
         // are time-boxed to the event). Events have no explicit end time in the model.
         public int QrExpiryBufferHours { get; set; } = 12;
+
+        // How often the TicketHoldSweeper scans for abandoned checkouts.
+        public int SweepIntervalSeconds { get; set; } = 60;
+
+        // Extra slack past HoldExpiresAt before a hold is swept. Protects a buyer who
+        // is mid-payment right at the expiry boundary.
+        public int SweepGraceMinutes { get; set; } = 2;
     }
 }
