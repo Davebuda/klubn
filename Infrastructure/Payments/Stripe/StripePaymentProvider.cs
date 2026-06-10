@@ -20,8 +20,9 @@ namespace DJDiP.Infrastructure.Payments.Stripe
     // Session id is stored in Payment.ProviderPspReference (via InitiateResult.
     // ProviderReference returned from InitiateAsync). All methods that need the Stripe
     // PaymentIntent id resolve it on-demand via ResolvePaymentIntentIdAsync, which
-    // lists Checkout Sessions filtered by client_reference_id = orderRef — a real-time
-    // consistent Stripe API (NOT the Search API). session.PaymentIntentId may be null
+    // scans the (real-time consistent) Sessions LIST for client_reference_id = orderRef
+    // — the list API has no such filter and Search is too stale for read-after-write;
+    // see the method comment. session.PaymentIntentId may be null
     // before the buyer completes checkout; the methods handle that safely:
     //   GetStatusAsync  → returns Pending snapshot (state = Pending)
     //   CaptureAsync    → throws (invalid before authorization)
@@ -231,27 +232,48 @@ namespace DJDiP.Infrastructure.Payments.Stripe
 
         // ---- PI resolution (adapter-local, real-time consistent) ------------------
 
-        // Lists Checkout Sessions with client_reference_id = orderRef — the real-time
-        // consistent path (NOT the Search API which is eventually consistent). Returns
-        // session.PaymentIntentId, or null when the session exists but the buyer hasn't
-        // completed checkout yet (PI not materialized). Throws when no session is found
-        // so the caller can surface a clear error rather than silently no-op.
-        //
-        // SessionListOptions.ClientReferenceId is not exposed as a typed property in
-        // Stripe.net v52, so we pass it via AddExtraParam (BaseOptions.ExtraParams).
+        // orderRef → PaymentIntent id, memoized per process (the return-page poll hits
+        // this every 2s, no point re-scanning once the PI is known).
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string>
+            s_piByOrderRef = new();
+
+        // The Sessions LIST API has NO client_reference_id filter (the API rejects the
+        // parameter — live-verified 2026-06-10), and the Search API is explicitly
+        // documented as unfit for read-after-write flows (docs/search "Data freshness":
+        // up to ~1 min stale — would break capture-right-after-payment). So we list
+        // recent sessions (created ≥ -24h; Checkout Sessions expire after 24h) newest-
+        // first and match client_reference_id client-side. Holds expire in minutes, so
+        // the match is on the first page in practice. Returns null when the session
+        // exists but the buyer hasn't completed checkout yet (PI not materialized);
+        // throws when no session matches so callers surface a clear error.
         private async Task<string?> ResolvePaymentIntentIdAsync(string orderRef, CancellationToken ct)
         {
-            var listOpts = new SessionListOptions { Limit = 1 };
-            listOpts.AddExtraParam("client_reference_id", orderRef);
-            var sessions = await new SessionService(_client).ListAsync(listOpts, null, ct);
-            var session = sessions.Data.FirstOrDefault();
+            if (s_piByOrderRef.TryGetValue(orderRef, out var known))
+                return known;
 
-            if (session is null)
-                throw new InvalidOperationException(
-                    $"Stripe: no Checkout Session found for order reference '{orderRef}'.");
+            var listOpts = new SessionListOptions
+            {
+                Limit = 100,
+                Created = new DateRangeOptions { GreaterThanOrEqual = DateTime.UtcNow.AddHours(-24) }
+            };
+            var service = new SessionService(_client);
+            await foreach (var session in service.ListAutoPagingAsync(listOpts, null, ct)
+                               .WithCancellation(ct))
+            {
+                if (!string.Equals(session.ClientReferenceId, orderRef, StringComparison.Ordinal))
+                    continue;
 
-            // PaymentIntentId is null until the buyer completes the session.
-            return string.IsNullOrEmpty(session.PaymentIntentId) ? null : session.PaymentIntentId;
+                // PaymentIntentId is null until the buyer completes the session — never
+                // memoize that, the next poll must see the PI once it materializes.
+                if (string.IsNullOrEmpty(session.PaymentIntentId))
+                    return null;
+
+                s_piByOrderRef[orderRef] = session.PaymentIntentId;
+                return session.PaymentIntentId;
+            }
+
+            throw new InvalidOperationException(
+                $"Stripe: no Checkout Session found for order reference '{orderRef}'.");
         }
 
         // ---- mapping (pure, unit-tested) ------------------------------------------
