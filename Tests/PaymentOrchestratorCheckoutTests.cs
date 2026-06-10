@@ -96,6 +96,196 @@ namespace DJDiP.Tests
             Assert.Empty(await h.Db.Orders.AsNoTracking().ToListAsync());
         }
 
+        // ---- per-user promo cap (atomic, in-tx — review finding 2) ------------------
+
+        [Fact]
+        public async Task Create_second_order_same_user_rejected_when_per_user_cap_is_one()
+        {
+            using var h = new OrchestratorTestHarness();
+            var (eventId, type) = h.SeedEvent(priceMinor: 50000, capacity: 10);
+            var user = h.SeedUser();
+            // Global cap is generous; the PER-USER cap is 1. The validator is faked Ok so the
+            // orchestrator's OWN in-tx per-user re-count is the thing under test (the validator's
+            // advisory count would race a concurrent second order and can't be the backstop).
+            var promo = h.SeedPromo(code: "ONEPU", pct: 10, maxRedemptions: 100, usageCount: 0,
+                maxRedemptionsPerUser: 1);
+            h.Promo.Result = new PromoValidationResult
+            {
+                Ok = true, Code = "ONEPU", PromoCodeId = promo.Id, DiscountMinor = 5000,
+                PerLineDiscounts = new[] { new PromoLineDiscount(type.Id, 5000) }
+            };
+
+            // First order succeeds and reserves one redemption for this user.
+            var first = await h.Orchestrator.CreatePaymentAsync(
+                eventId, Line(type.Id), null, user.Id, "ONEPU", null, CancellationToken.None);
+            var firstOrder = await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Reference == first.Order.Reference);
+            Assert.Equal(PromoRedemptionStatus.Reserved,
+                (await h.Db.PromoRedemptions.AsNoTracking().FirstAsync(r => r.OrderId == firstOrder.Id)).Status);
+
+            var usageAfterFirst = (await h.Db.PromotionCodes.AsNoTracking().FirstAsync(p => p.Id == promo.Id)).UsageCount;
+            Assert.Equal(1, usageAfterFirst);
+
+            // Second order by the SAME user must be rejected by the in-tx per-user re-count.
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                h.Orchestrator.CreatePaymentAsync(
+                    eventId, Line(type.Id), null, user.Id, "ONEPU", null, CancellationToken.None));
+            Assert.Equal("You've already used this code.", ex.Message);
+
+            // The whole second tx rolled back: still exactly one order, the global UsageCount the
+            // second attempt incremented was rolled back to 1, and no second hold leaked.
+            Assert.Equal(1, await h.Db.Orders.AsNoTracking().CountAsync());
+            Assert.Equal(1, (await h.Db.PromotionCodes.AsNoTracking().FirstAsync(p => p.Id == promo.Id)).UsageCount);
+            Assert.Equal(1, (await h.Db.TicketTypes.AsNoTracking().FirstAsync(t => t.Id == type.Id)).QuantityHeld);
+        }
+
+        [Fact]
+        public async Task Create_second_order_different_user_allowed_under_per_user_cap()
+        {
+            using var h = new OrchestratorTestHarness();
+            var (eventId, type) = h.SeedEvent(priceMinor: 50000, capacity: 10);
+            var userA = h.SeedUser();
+            var userB = h.SeedUser();
+            var promo = h.SeedPromo(code: "ONEPU", pct: 10, maxRedemptions: 100, usageCount: 0,
+                maxRedemptionsPerUser: 1);
+            h.Promo.Result = new PromoValidationResult
+            {
+                Ok = true, Code = "ONEPU", PromoCodeId = promo.Id, DiscountMinor = 5000,
+                PerLineDiscounts = new[] { new PromoLineDiscount(type.Id, 5000) }
+            };
+
+            await h.Orchestrator.CreatePaymentAsync(
+                eventId, Line(type.Id), null, userA.Id, "ONEPU", null, CancellationToken.None);
+            // A DIFFERENT user with their own 0 redemptions is under the per-user cap → allowed.
+            var second = await h.Orchestrator.CreatePaymentAsync(
+                eventId, Line(type.Id), null, userB.Id, "ONEPU", null, CancellationToken.None);
+
+            Assert.Equal(2, await h.Db.Orders.AsNoTracking().CountAsync());
+            Assert.Equal(2, (await h.Db.PromotionCodes.AsNoTracking().FirstAsync(p => p.Id == promo.Id)).UsageCount);
+            var secondOrder = await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Reference == second.Order.Reference);
+            Assert.Equal(PromoRedemptionStatus.Reserved,
+                (await h.Db.PromoRedemptions.AsNoTracking().FirstAsync(r => r.OrderId == secondOrder.Id)).Status);
+        }
+
+        [Fact]
+        public async Task Retry_re_reserve_does_not_self_block_on_its_own_released_redemption()
+        {
+            using var h = new OrchestratorTestHarness();
+            var (eventId, type) = h.SeedEvent(priceMinor: 50000, capacity: 10);
+            var user = h.SeedUser();
+            // Per-user cap of 1: the ONLY redemption for this user is this order's own row.
+            var promo = h.SeedPromo(code: "ONEPU", pct: 10, maxRedemptions: 100, usageCount: 0,
+                maxRedemptionsPerUser: 1);
+            h.Promo.Result = new PromoValidationResult
+            {
+                Ok = true, Code = "ONEPU", PromoCodeId = promo.Id, DiscountMinor = 5000,
+                PerLineDiscounts = new[] { new PromoLineDiscount(type.Id, 5000) }
+            };
+
+            var created = await h.Orchestrator.CreatePaymentAsync(
+                eventId, Line(type.Id), null, user.Id, "ONEPU", null, CancellationToken.None);
+            var order = await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Reference == created.Order.Reference);
+
+            // Expire it → the order's own redemption flips to Released, UsageCount decremented to 0.
+            await h.Orchestrator.FinalizeAsync(new PaymentEvent(
+                created.Order.Reference, null, PaymentEventType.Expired, Money.Nok(0), DateTime.UtcNow, "{}"),
+                CancellationToken.None);
+            Assert.Equal(PromoRedemptionStatus.Released,
+                (await h.Db.PromoRedemptions.AsNoTracking().FirstAsync(r => r.OrderId == order.Id)).Status);
+
+            // Retry re-reserves the SAME order's Released row. Its own row must NOT count against
+            // the per-user cap (it was counted when first reserved), so the retry succeeds.
+            var retry = await h.Orchestrator.RetryPaymentAsync(
+                created.Order.Reference, provider: null, actingUserId: user.Id, CancellationToken.None);
+            Assert.Equal(created.Order.Reference, retry.Order.Reference);
+
+            // The redemption is back to Reserved and UsageCount re-incremented to 1.
+            Assert.Equal(PromoRedemptionStatus.Reserved,
+                (await h.Db.PromoRedemptions.AsNoTracking().FirstAsync(r => r.OrderId == order.Id)).Status);
+            Assert.Equal(1, (await h.Db.PromotionCodes.AsNoTracking().FirstAsync(p => p.Id == promo.Id)).UsageCount);
+        }
+
+        [Fact]
+        public async Task Retry_re_reserve_blocked_when_another_order_holds_the_per_user_cap()
+        {
+            using var h = new OrchestratorTestHarness();
+            var (eventId, type) = h.SeedEvent(priceMinor: 50000, capacity: 10);
+            var user = h.SeedUser();
+            var promo = h.SeedPromo(code: "ONEPU", pct: 10, maxRedemptions: 100, usageCount: 0,
+                maxRedemptionsPerUser: 1);
+            h.Promo.Result = new PromoValidationResult
+            {
+                Ok = true, Code = "ONEPU", PromoCodeId = promo.Id, DiscountMinor = 5000,
+                PerLineDiscounts = new[] { new PromoLineDiscount(type.Id, 5000) }
+            };
+
+            var created = await h.Orchestrator.CreatePaymentAsync(
+                eventId, Line(type.Id), null, user.Id, "ONEPU", null, CancellationToken.None);
+            var order = await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Reference == created.Order.Reference);
+
+            // Expire to release this order's row (so the re-reserve branch is exercised).
+            await h.Orchestrator.FinalizeAsync(new PaymentEvent(
+                created.Order.Reference, null, PaymentEventType.Expired, Money.Nok(0), DateTime.UtcNow, "{}"),
+                CancellationToken.None);
+
+            // A DIFFERENT live (Reserved) redemption by the SAME user now occupies the cap of 1.
+            // The retry's in-tx re-count of OTHER rows must see it and block the re-reserve.
+            h.SeedRedemption(promo.Id, Guid.NewGuid(), user.Id, PromoRedemptionStatus.Reserved);
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                h.Orchestrator.RetryPaymentAsync(created.Order.Reference, null, user.Id, CancellationToken.None));
+            Assert.Equal("You've already used this code.", ex.Message);
+
+            // The retry tx rolled back: this order's redemption is still Released (not re-reserved).
+            Assert.Equal(PromoRedemptionStatus.Released,
+                (await h.Db.PromoRedemptions.AsNoTracking().FirstAsync(r => r.OrderId == order.Id)).Status);
+        }
+
+        // ---- hidden-tier query leak (review finding 1) ------------------------------
+
+        // The public ticketTypes resolvers (Program.cs Query.TicketTypes / TicketTypesByEvent)
+        // are part of the web composition root and aren't unit-testable here; their filter is
+        // asserted end-to-end by C8. This test pins the FILTER SEMANTICS at the data level:
+        // a hidden OnSale tier is absent from the public predicate and present for the manager
+        // predicate, against real SQLite — the same predicate the resolvers apply.
+        [Fact]
+        public async Task Hidden_onsale_tier_absent_from_public_filter_present_for_manager()
+        {
+            using var h = new OrchestratorTestHarness();
+            var (eventId, visible) = h.SeedEvent(priceMinor: 50000, capacity: 10,
+                hidden: false, status: TicketTypeStatus.OnSale);
+            var hidden = new TicketType
+            {
+                Id = Guid.NewGuid(), EventId = eventId, Name = "Secret VIP",
+                PriceMinor = 90000, VATRate = 0.12m, Capacity = 5,
+                QuantitySold = 0, QuantityHeld = 0, AdmitCount = 1,
+                MinPerOrder = 1, MaxPerOrder = 4,
+                Status = TicketTypeStatus.OnSale, IsHidden = true
+            };
+            h.Db.TicketTypes.Add(hidden);
+            await h.Db.SaveChangesAsync();
+
+            // Public predicate (mirrors Query.TicketTypesByEvent non-manager branch):
+            // OnSale && !IsHidden.
+            var publicIds = await h.Db.TicketTypes.AsNoTracking()
+                .Where(tt => tt.EventId == eventId && tt.Status == TicketTypeStatus.OnSale && !tt.IsHidden)
+                .Select(tt => tt.Id).ToListAsync();
+            Assert.Contains(visible.Id, publicIds);
+            Assert.DoesNotContain(hidden.Id, publicIds);
+
+            // Public predicate (mirrors Query.TicketTypes): !Draft && !IsHidden.
+            var publicListIds = await h.Db.TicketTypes.AsNoTracking()
+                .Where(tt => tt.EventId == eventId && tt.Status != TicketTypeStatus.Draft && !tt.IsHidden)
+                .Select(tt => tt.Id).ToListAsync();
+            Assert.DoesNotContain(hidden.Id, publicListIds);
+
+            // Manager path (no visibility filter) sees BOTH tiers.
+            var managerIds = await h.Db.TicketTypes.AsNoTracking()
+                .Where(tt => tt.EventId == eventId)
+                .Select(tt => tt.Id).ToListAsync();
+            Assert.Contains(visible.Id, managerIds);
+            Assert.Contains(hidden.Id, managerIds);
+        }
+
         // ---- provider validation ----------------------------------------------------
 
         [Fact]

@@ -91,7 +91,10 @@ namespace DJDiP.Tests
 
         public ApplicationUser SeedUser()
         {
-            var u = new ApplicationUser { Id = Guid.NewGuid().ToString("N"), FullName = "Test Buyer", Email = "buyer@example.com" };
+            // Unique email per call — ApplicationUsers.Email is UNIQUE, so multi-user tests
+            // (e.g. per-user promo cap across two buyers) can seed more than one buyer.
+            var id = Guid.NewGuid().ToString("N");
+            var u = new ApplicationUser { Id = id, FullName = "Test Buyer", Email = $"buyer-{id}@example.com" };
             Db.ApplicationUsers.Add(u);
             Db.SaveChanges();
             return u;
@@ -100,7 +103,7 @@ namespace DJDiP.Tests
         public PromotionCode SeedPromo(
             string code = "SAVE10", PromoKind kind = PromoKind.Percent,
             decimal pct = 10, long amountMinor = 0, int? maxRedemptions = null,
-            int usageCount = 0, bool active = true)
+            int usageCount = 0, bool active = true, int? maxRedemptionsPerUser = null)
         {
             var promo = new PromotionCode
             {
@@ -112,11 +115,30 @@ namespace DJDiP.Tests
                 ValidUntil = DateTime.UtcNow.AddDays(30),
                 MaxRedemptions = maxRedemptions,
                 UsageCount = usageCount,
-                IsActive = active
+                IsActive = active,
+                MaxRedemptionsPerUser = maxRedemptionsPerUser
             };
             Db.PromotionCodes.Add(promo);
             Db.SaveChanges();
             return promo;
+        }
+
+        // Seed a PromoRedemption row directly (for the retry self-block edge case). Returns it.
+        public PromoRedemption SeedRedemption(
+            Guid promoCodeId, Guid orderId, string userId, PromoRedemptionStatus status)
+        {
+            var row = new PromoRedemption
+            {
+                Id = Guid.NewGuid(),
+                PromoCodeId = promoCodeId,
+                OrderId = orderId,
+                UserId = userId,
+                Status = status,
+                CreatedAt = DateTime.UtcNow
+            };
+            Db.Set<PromoRedemption>().Add(row);
+            Db.SaveChanges();
+            return row;
         }
 
         public void Dispose()

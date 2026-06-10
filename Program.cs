@@ -504,7 +504,9 @@ public class Query
         [Service] AppDbContext db)
     {
         var types = await db.TicketTypes
-            .Where(t => t.EventId == eventId && t.Status != TicketTypeStatus.Draft)
+            // Public read: drafts AND hidden tiers (design §3.2 — visible only via an
+            // UnlocksHiddenTypes promo at quote/create) are excluded from the open list.
+            .Where(t => t.EventId == eventId && t.Status != TicketTypeStatus.Draft && !t.IsHidden)
             .OrderBy(t => t.SortOrder)
             .ToListAsync();
 
@@ -858,7 +860,10 @@ public class Query
 
         var query = db.TicketTypes.AsNoTracking().Where(tt => tt.EventId == eventId);
         if (!isManager)
-            query = query.Where(tt => tt.Status == TicketTypeStatus.OnSale);
+            // Public callers see only sellable, non-hidden tiers; hidden tiers (design §3.2)
+            // are reachable only through an UnlocksHiddenTypes promo at quote/create. Managers
+            // (Admin/CoAdmin) keep seeing every tier for back-office management.
+            query = query.Where(tt => tt.Status == TicketTypeStatus.OnSale && !tt.IsHidden);
 
         var types = await query
             .OrderBy(tt => tt.SortOrder)

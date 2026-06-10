@@ -287,6 +287,35 @@ namespace DJDiP.Infrastructure.Payments
                     throw new InvalidOperationException("This code is no longer available.");
                 }
 
+                // Per-user cap — enforced ATOMICALLY inside this same tx (design §3.1/§7).
+                // The validator's per-user count (PromoCodeService) is advisory only: it races
+                // a concurrent second order by the same user, so on its own it cannot stop a
+                // user exceeding MaxRedemptionsPerUser. After the GLOBAL UsageCount CAS wins,
+                // re-count THIS user's still-live (Reserved|Consumed) rows for this promo within
+                // the transaction (EF LINQ runs on the same connection/tx). The current order's
+                // row hasn't been inserted yet, so it is correctly excluded from the count.
+                // count >= cap ⇒ roll the WHOLE tx back (releasing the inventory hold AND the
+                // UsageCount we just incremented) and reject. We re-read the cap from the row
+                // because the validation result doesn't carry it.
+                var perUserCap = await _db.PromotionCodes
+                    .Where(p => p.Id == promoId)
+                    .Select(p => p.MaxRedemptionsPerUser)
+                    .FirstOrDefaultAsync(ct);
+                if (perUserCap.HasValue)
+                {
+                    var userLive = await _db.Set<PromoRedemption>()
+                        .CountAsync(rd => rd.PromoCodeId == promoId
+                                          && rd.UserId == actingUserId
+                                          && (rd.Status == PromoRedemptionStatus.Reserved
+                                              || rd.Status == PromoRedemptionStatus.Consumed), ct);
+                    if (userLive >= perUserCap.Value)
+                    {
+                        await tx.RollbackAsync(ct);
+                        // Message kept consistent with PromoCodeService's advisory check.
+                        throw new InvalidOperationException("You've already used this code.");
+                    }
+                }
+
                 // Audit + per-user-limit row. The UNIQUE(OrderId) index is the backstop.
                 _db.Set<PromoRedemption>().Add(new PromoRedemption
                 {
@@ -465,6 +494,33 @@ namespace DJDiP.Infrastructure.Payments
                         await tx.RollbackAsync(ct);
                         throw new InvalidOperationException("This code is no longer available.");
                     }
+
+                    // Per-user cap, re-checked atomically in-tx (design §3.1/§7), same as create.
+                    // EDGE CASE: THIS order's redemption row already exists with Status=Released
+                    // (we're about to flip it back to Reserved) — it was already counted against
+                    // the user when first reserved, so it must NOT self-block. We therefore count
+                    // OTHER (OrderId != this) still-live Reserved|Consumed rows for the user and
+                    // require that to be < cap. Done BEFORE the flip; excluding by OrderId makes
+                    // it order-independent regardless.
+                    var retryCap = await _db.PromotionCodes
+                        .Where(p => p.Id == promoId)
+                        .Select(p => p.MaxRedemptionsPerUser)
+                        .FirstOrDefaultAsync(ct);
+                    if (retryCap.HasValue)
+                    {
+                        var otherLive = await _db.Set<PromoRedemption>()
+                            .CountAsync(rd => rd.PromoCodeId == promoId
+                                              && rd.UserId == actingUserId
+                                              && rd.OrderId != order.Id
+                                              && (rd.Status == PromoRedemptionStatus.Reserved
+                                                  || rd.Status == PromoRedemptionStatus.Consumed), ct);
+                        if (otherLive >= retryCap.Value)
+                        {
+                            await tx.RollbackAsync(ct);
+                            throw new InvalidOperationException("You've already used this code.");
+                        }
+                    }
+
                     redemption.Status = PromoRedemptionStatus.Reserved;
                 }
             }

@@ -235,8 +235,8 @@ namespace DJDiP.Application.Services
                    "<div class=\"hdr\"><h1>KlubN</h1><p>Your night. Your music.</p></div>" +
                    $"<div class=\"body\">{bodyContent}</div>" +
                    "<div class=\"footer\">" +
-                   "<p>&copy; KlubN &middot; <a href=\"https://klubn.com\">klubn.com</a></p>" +
-                   "<p>Questions? <a href=\"mailto:support@klubn.com\">support@klubn.com</a></p>" +
+                   "<p>&copy; KlubN &middot; <a href=\"https://klubn.no\">klubn.no</a></p>" +
+                   "<p>Questions? <a href=\"mailto:support@klubn.no\">support@klubn.no</a></p>" +
                    "</div></div></body></html>";
         }
 
@@ -374,7 +374,7 @@ namespace DJDiP.Application.Services
                 "<div class=\"val\" style=\"font-family:monospace;font-size:13px;color:#999\">" + E(transactionId) + "</div>" +
                 "</div>" +
                 "<p style=\"color:#555;font-size:12px\">Questions? " +
-                "<a href=\"mailto:support@klubn.com\" style=\"color:#FF6B35\">support@klubn.com</a></p>";
+                "<a href=\"mailto:support@klubn.no\" style=\"color:#FF6B35\">support@klubn.no</a></p>";
 
             return WrapInLayout($"Refund for {eventTitle}", body);
         }
