@@ -1,3 +1,5 @@
+using DJDiP.Application.DTO.PaymentDTO;
+
 namespace DJDiP.Application.Interfaces
 {
     public interface IEmailService
@@ -13,6 +15,13 @@ namespace DJDiP.Application.Interfaces
             string venueCity,
             decimal totalPrice,
             string qrCode);
+
+        /// <summary>
+        /// Sends ONE itemized order confirmation for a finalized ticket order
+        /// (checkout-orchestration design §4.4). Lines carry the discounted line totals;
+        /// a discount line is shown when a promo was applied. Money is minor units (øre).
+        /// </summary>
+        Task SendOrderConfirmationAsync(OrderConfirmationEmail email);
 
         /// <summary>Sends a ticket transfer confirmation to the new owner.</summary>
         Task SendTicketTransferConfirmationAsync(

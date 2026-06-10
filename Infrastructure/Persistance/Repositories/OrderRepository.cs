@@ -50,6 +50,21 @@ namespace DJDiP.Infrastructure.Persistance.Repositories
                 .FirstOrDefaultAsync(o => o.Id == orderId);
         }
 
+        public async Task<Order?> GetOrderForConfirmationAsync(Guid orderId, CancellationToken ct)
+        {
+            // AsNoTracking on the read graph; the confirmation service stamps Ticket rows
+            // through the Tickets repo separately (those ARE tracked there).
+            return await _dbSet
+                .AsNoTracking()
+                .Include(o => o.User)
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Event)
+                        .ThenInclude(e => e.Venue)
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.TicketType)
+                .FirstOrDefaultAsync(o => o.Id == orderId, ct);
+        }
+
         public async Task<IEnumerable<Order>> GetOrdersWithPaymentAsync()
         {
             return await _dbSet

@@ -1,3 +1,6 @@
+using System.Globalization;
+using System.Text;
+using DJDiP.Application.DTO.PaymentDTO;
 using DJDiP.Application.Interfaces;
 using DJDiP.Application.Options;
 using MailKit.Net.Smtp;
@@ -33,6 +36,13 @@ namespace DJDiP.Application.Services
                 toName, ticketNumber, eventTitle, eventDate,
                 venueName, venueCity, totalPrice, qrCode);
             await SendAsync(toEmail, toName, subject, html);
+        }
+
+        public async Task SendOrderConfirmationAsync(OrderConfirmationEmail email)
+        {
+            var subject = $"Your KlubN tickets — {email.EventTitle}";
+            var html = BuildOrderConfirmationHtml(email);
+            await SendAsync(email.ToEmail, email.ToName, subject, html);
         }
 
         public async Task SendTicketTransferConfirmationAsync(
@@ -263,6 +273,63 @@ namespace DJDiP.Application.Services
                 "<p style=\"color:#555;font-size:12px;margin-top:24px\">Doors open 30 minutes before the event. Valid photo ID required.</p>";
 
             return WrapInLayout($"Your ticket for {eventTitle}", body);
+        }
+
+        private static string BuildOrderConfirmationHtml(OrderConfirmationEmail email)
+        {
+            Func<string, string> E = System.Net.WebUtility.HtmlEncode;
+            var formattedDate = email.EventDate.ToString("dddd, d MMMM yyyy · HH:mm");
+            var cityPart = string.IsNullOrWhiteSpace(email.VenueCity) ? "" : $", {E(email.VenueCity)}";
+
+            // Money is minor units (øre). Format as "{major}.{2dp} {CUR}" (invariant), e.g.
+            // "450.00 NOK" — never the legacy euro glyph (prices are NOK).
+            string Money(long minor) =>
+                (minor / 100m).ToString("0.00", CultureInfo.InvariantCulture) + " " + E(email.Currency);
+
+            var rows = new StringBuilder();
+            foreach (var line in email.Lines)
+            {
+                rows.Append("<div style=\"display:flex;justify-content:space-between;align-items:baseline;margin:0 0 10px\">")
+                    .Append($"<span style=\"color:#ddd;font-size:14px\">{E(line.Name)} &times; {line.Quantity}</span>")
+                    .Append($"<span style=\"color:#fff;font-size:14px;font-family:monospace\">{Money(line.LineTotalMinor)}</span>")
+                    .Append("</div>");
+            }
+
+            var discountBlock = email.DiscountMinor > 0
+                ? "<div style=\"display:flex;justify-content:space-between;align-items:baseline;margin:0 0 10px\">" +
+                  $"<span style=\"color:#22c55e;font-size:14px\">Discount{(string.IsNullOrWhiteSpace(email.PromoCode) ? "" : $" ({E(email.PromoCode!)})")}</span>" +
+                  $"<span style=\"color:#22c55e;font-size:14px;font-family:monospace\">-{Money(email.DiscountMinor)}</span>" +
+                  "</div>"
+                : "";
+
+            var body =
+                "<span class=\"badge\">Order Confirmed</span>" +
+                $"<p style=\"font-size:18px;font-weight:700;color:#fff;margin:0 0 8px\">Hey {E(email.ToName)}! &#127881;</p>" +
+                "<p style=\"color:#aaa;margin:0 0 24px\">Your tickets are confirmed. Here's your order:</p>" +
+                "<div class=\"tbox\">" +
+                "<div class=\"lbl\">Order Reference</div><div class=\"val big\">" + E(email.Reference) + "</div>" +
+                "<div class=\"lbl\">Event</div><div class=\"val\">" + E(email.EventTitle) + "</div>" +
+                "<div class=\"lbl\">Date &amp; Time</div><div class=\"val\">" + E(formattedDate) + "</div>" +
+                "<div class=\"lbl\">Venue</div><div class=\"val\">" + E(email.VenueName) + cityPart + "</div>" +
+                "<hr class=\"divider\"/>" +
+                rows +
+                discountBlock +
+                "<hr class=\"divider\"/>" +
+                "<div style=\"display:flex;justify-content:space-between;align-items:baseline\">" +
+                "<span style=\"color:#FF6B35;font-size:13px;text-transform:uppercase;letter-spacing:.2em\">Total Paid</span>" +
+                $"<span style=\"color:#FF6B35;font-size:20px;font-weight:700;font-family:monospace\">{Money(email.TotalMinor)}</span>" +
+                "</div>" +
+                "<p style=\"color:#666;font-size:11px;margin:8px 0 0\">Prices include Norwegian VAT.</p>" +
+                "</div>" +
+                "<div style=\"text-align:center;margin:32px 0\">" +
+                $"<a href=\"{E(email.TicketsUrl)}\" style=\"display:inline-block;background:linear-gradient(135deg,#FF6B35,#5D1725);" +
+                "color:#fff;font-size:14px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;" +
+                "padding:14px 40px;border-radius:999px;text-decoration:none\">View My Tickets</a>" +
+                "</div>" +
+                "<p style=\"color:#888;font-size:13px;line-height:1.6\">Your QR codes are in your KlubN wallet and will be scanned at the door. " +
+                "Doors open 30 minutes before the event. Valid photo ID required.</p>";
+
+            return WrapInLayout($"Your KlubN tickets — {email.EventTitle}", body);
         }
 
         private static string BuildTransferConfirmationHtml(

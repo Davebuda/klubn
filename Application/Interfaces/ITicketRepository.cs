@@ -9,5 +9,9 @@ namespace DJDiP.Application.Interfaces
         Task<Ticket?> GetByTicketNumberAsync(string ticketNumber);
         Task<IEnumerable<Ticket>> GetValidTicketsAsync();
         Task<IEnumerable<Ticket>> GetTicketsByDateRangeAsync(DateTime startDate, DateTime endDate);
+
+        // Tickets issued for an order, reached via OrderItem.OrderId. TRACKED (no Include)
+        // so the confirmation service can stamp ConfirmationEmailSentTo/Date and save.
+        Task<IEnumerable<Ticket>> GetTicketsByOrderAsync(Guid orderId, CancellationToken ct);
     }
 } 

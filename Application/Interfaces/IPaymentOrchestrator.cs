@@ -13,11 +13,40 @@ namespace DJDiP.Application.Interfaces
         // Checkout: resolve prices from TicketType (never client amounts), persist
         // Reference + Payment(Created) first, hold inventory (oversell-safe), then
         // InitiateAsync. Returns the §6 resolved summary + provider redirectUrl.
+        //
+        // promoCode (C4, design §3.1/§4.1): null/blank ⇒ no discount. A NON-null code is
+        // validated AFTER resolving the lines; an INVALID code is a HARD error here
+        // (InvalidOperationException with the validator's Reason) — unlike quote, create
+        // never silently drops a discount. A valid code reserves one usage atomically
+        // (UsageCount CAS) inside the inventory transaction and may unlock IsHidden tiers.
+        //
+        // provider (C4, design §4.3): null ⇒ registry.DefaultProvider; otherwise the name
+        // is checked against registry.IsEnabled FIRST (before any state is created) and an
+        // unknown/disabled name throws InvalidOperationException("Unknown payment provider.").
+        // The chosen provider is stamped on the Payment row so every later step resolves it
+        // from the row, never global config. A 100%-discount (zero-total) order is legal:
+        // InitiateAsync is skipped and the order finalizes through the SAME FinalizeAsync
+        // path via a synthesized free-capture event.
         Task<CreatePaymentResult> CreatePaymentAsync(
             Guid eventId,
             IReadOnlyList<OrderLineRequest> lines,
             string? customerEmail,
             string? actingUserId,
+            string? promoCode,
+            string? provider,
+            CancellationToken ct);
+
+        // Retry payment for an unpaid order (C4, design §3.5/§6). Owner-checked; rejected
+        // if any attempt is Captured or the order is Paid/Fulfilled/Refunded. Best-effort
+        // cancels the latest non-terminal attempt, re-reserves any released holds AND the
+        // promo reservation (hard error if either is no longer available — totals were
+        // computed with the discount), then creates a NEW Payment row (AttemptNo = max+1,
+        // ProviderReference = "{Reference}-r{N}") BEFORE InitiateAsync. provider: null ⇒
+        // default; otherwise IsEnabled-checked. Returns the same CreatePaymentResult shape.
+        Task<CreatePaymentResult> RetryPaymentAsync(
+            string reference,
+            string? provider,
+            string actingUserId,
             CancellationToken ct);
 
         // Shared idempotent finalize/reconcile path consumed by BOTH the webhook (P6)

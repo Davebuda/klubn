@@ -15,6 +15,15 @@ namespace DJDiP.Infrastructure.Payments
             IReadOnlyList<OrderLineRequest> lines,
             string? customerEmail,
             string? actingUserId,
+            string? promoCode,
+            string? provider,
+            CancellationToken ct)
+            => throw NotReady();
+
+        public Task<CreatePaymentResult> RetryPaymentAsync(
+            string reference,
+            string? provider,
+            string actingUserId,
             CancellationToken ct)
             => throw NotReady();
 

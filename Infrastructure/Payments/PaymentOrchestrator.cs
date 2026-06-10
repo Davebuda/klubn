@@ -18,10 +18,18 @@ namespace DJDiP.Infrastructure.Payments
     // initiates through the registry's DEFAULT provider; Finalize/capture resolve the provider
     // from the Payment ROW (payment.Provider) — the row knows who initiated it, so a config
     // flip (e.g. Vipps→Stripe) can no longer break reconcile for an in-flight Vipps order.
+    //
+    // C4 (design §3.1/§3.5/§4.4): promo reserve/consume/release (hold-style, mirroring
+    // inventory), per-checkout provider choice, multi-attempt retry, an order-level CAS that
+    // makes fulfillment exactly-once across attempts, and a post-commit (best-effort)
+    // confirmation email. The promo SQL is the ATOMIC backstop (counters never COUNT(*));
+    // quoted identifiers keep every raw statement valid on SQLite (dev) AND PostgreSQL (prod).
     public sealed class PaymentOrchestrator : IPaymentOrchestrator
     {
         private readonly AppDbContext _db;
         private readonly IPaymentProviderRegistry _registry;
+        private readonly IPromoCodeService _promoCodes;
+        private readonly IOrderConfirmationService _confirmation;
         private readonly IQrTokenService _qr;
         private readonly TicketingOptions _opts;
         private readonly ILogger<PaymentOrchestrator> _log;
@@ -29,12 +37,16 @@ namespace DJDiP.Infrastructure.Payments
         public PaymentOrchestrator(
             AppDbContext db,
             IPaymentProviderRegistry registry,
+            IPromoCodeService promoCodes,
+            IOrderConfirmationService confirmation,
             IQrTokenService qr,
             IOptions<TicketingOptions> opts,
             ILogger<PaymentOrchestrator> log)
         {
             _db = db;
             _registry = registry;
+            _promoCodes = promoCodes;
+            _confirmation = confirmation;
             _qr = qr;
             _opts = opts.Value;
             _log = log;
@@ -47,6 +59,8 @@ namespace DJDiP.Infrastructure.Payments
             IReadOnlyList<OrderLineRequest> lines,
             string? customerEmail,
             string? actingUserId,
+            string? promoCode,
+            string? provider,
             CancellationToken ct)
         {
             if (lines is null || lines.Count == 0)
@@ -57,10 +71,17 @@ namespace DJDiP.Infrastructure.Payments
             if (string.IsNullOrEmpty(actingUserId))
                 throw new InvalidOperationException("Authentication required to buy tickets.");
 
-            // C3: initiate through the DEFAULT provider (C4 will let a checkout pick one).
-            // Its name is stamped on the Payment row so every later step (finalize, reconcile,
-            // webhook routing) resolves the SAME provider from the row, never global config.
-            var provider = _registry.Resolve(_registry.DefaultProvider);
+            // Provider choice (C4, design §4.3): validate the requested provider BEFORE any
+            // state exists (design §8: "Unknown provider name at create → 400 before any
+            // state"). null ⇒ default. The chosen name is stamped on the Payment row so every
+            // later step (finalize, reconcile, webhook routing) resolves the SAME provider
+            // from the row, never global config.
+            var resolvedName = string.IsNullOrWhiteSpace(provider)
+                ? _registry.DefaultProvider
+                : provider;
+            if (!_registry.IsEnabled(resolvedName))
+                throw new InvalidOperationException("Unknown payment provider.");
+            var chosenProvider = _registry.Resolve(resolvedName);
 
             // Collapse duplicate lines for the same tier.
             var requested = lines
@@ -79,10 +100,43 @@ namespace DJDiP.Infrastructure.Payments
             if (types.Count != requested.Count)
                 throw new InvalidOperationException("One or more ticket types were not found for this event.");
 
+            // Promo validation (C4, design §4.1) — run AFTER resolving types/lines (the
+            // validator needs UnitPriceMinor/VatRate/IsHidden per line). An INVALID promo at
+            // create is a HARD error (design §4.1/§5: create never silently drops a discount).
+            // A valid code may unlock IsHidden tiers; the unlock set covers the hidden-line
+            // rejection below.
+            var hasPromo = !string.IsNullOrWhiteSpace(promoCode);
+            PromoValidationResult? promo = null;
+            if (hasPromo)
+            {
+                var promoLines = requested
+                    .Select(r =>
+                    {
+                        var t = types[r.TicketTypeId];
+                        return new PromoLine(t.Id, r.Quantity, t.PriceMinor, t.VATRate, t.IsHidden);
+                    })
+                    .ToList();
+
+                promo = await _promoCodes.ValidateAsync(promoCode!, eventId, promoLines, actingUserId, ct);
+                if (!promo.Ok)
+                    throw new InvalidOperationException(promo.Reason ?? "This code isn't valid.");
+            }
+
+            var unlocked = promo is { Ok: true }
+                ? promo.UnlockedTicketTypeIds.ToHashSet()
+                : new HashSet<Guid>();
+
             var now = DateTime.UtcNow;
             foreach (var r in requested)
             {
                 var t = types[r.TicketTypeId];
+
+                // Hidden tier: treat as not-found unless the validated promo unlocks it —
+                // never leak hidden-tier existence (design §3.2). Same message as create's
+                // unknown-type error.
+                if (t.IsHidden && !unlocked.Contains(t.Id))
+                    throw new InvalidOperationException("One or more ticket types were not found for this event.");
+
                 if (t.Status != TicketTypeStatus.OnSale)
                     throw new InvalidOperationException($"\"{t.Name}\" is not on sale.");
                 if (t.SalesStart.HasValue && now < t.SalesStart.Value)
@@ -94,6 +148,11 @@ namespace DJDiP.Infrastructure.Payments
                 if (r.Quantity > t.MaxPerOrder)
                     throw new InvalidOperationException($"Maximum {t.MaxPerOrder} per order for \"{t.Name}\".");
             }
+
+            // Per-line discount allocation (only when a promo validated Ok).
+            var discountByType = promo is { Ok: true }
+                ? promo.PerLineDiscounts.ToDictionary(d => d.TicketTypeId, d => d.DiscountMinor)
+                : new Dictionary<Guid, long>();
 
             var reference = "klubn-" + Guid.NewGuid().ToString("N")[..8];
 
@@ -107,20 +166,32 @@ namespace DJDiP.Infrastructure.Payments
                 CustomerEmail = customerEmail,
                 HoldExpiresAt = now.AddMinutes(_opts.HoldMinutes),
                 OrderItems = new List<OrderItem>(),
-                Holds = new List<TicketHold>()
+                Holds = new List<TicketHold>(),
+                PromotionCodeId = promo is { Ok: true } ? promo.PromoCodeId : null,
+                PromoCode = promo is { Ok: true } ? promo.Code : null
             };
 
-            long subtotalMinor = 0, vatMinor = 0, totalMinor = 0;
+            // Totals (design §3.3/§4.1): per line, VAT is computed on the DISCOUNTED gross
+            // (prices are VAT-inclusive). LineTotalMinor stays the UNDISCOUNTED gross
+            // (Quantity × UnitPriceMinor — its defined meaning); OrderItem.DiscountMinor is the
+            // per-line discount; Order.DiscountMinor is the total; Order.TotalAmount is the
+            // discounted total; the provider Amount is the discounted total in minor units.
+            long grossTotalMinor = 0, subtotalMinor = 0, vatMinor = 0, discountTotalMinor = 0;
             var summaryLines = new List<OrderLineSummary>();
 
             foreach (var r in requested)
             {
                 var t = types[r.TicketTypeId];
-                var lineTotal = checked(t.PriceMinor * r.Quantity);      // gross, VAT-inclusive
-                var net = (long)Math.Round(lineTotal / (1m + t.VATRate), MidpointRounding.AwayFromZero);
-                var vat = lineTotal - net;
+                var lineGross = checked(t.PriceMinor * r.Quantity);     // gross, VAT-inclusive
+                discountByType.TryGetValue(t.Id, out var lineDiscount);
+                if (lineDiscount > lineGross) lineDiscount = lineGross; // never exceed gross
+                var discountedGross = lineGross - lineDiscount;
 
-                totalMinor += lineTotal;
+                var net = (long)Math.Round(discountedGross / (1m + t.VATRate), MidpointRounding.AwayFromZero);
+                var vat = discountedGross - net;
+
+                grossTotalMinor += lineGross;
+                discountTotalMinor += lineDiscount;
                 subtotalMinor += net;
                 vatMinor += vat;
 
@@ -133,7 +204,8 @@ namespace DJDiP.Infrastructure.Payments
                     Quantity = r.Quantity,
                     UnitPriceMinor = t.PriceMinor,
                     UnitVatRate = t.VATRate,
-                    LineTotalMinor = lineTotal
+                    LineTotalMinor = lineGross,        // UNDISCOUNTED gross (Quantity × UnitPriceMinor)
+                    DiscountMinor = lineDiscount
                 });
 
                 order.Holds.Add(new TicketHold
@@ -153,10 +225,12 @@ namespace DJDiP.Infrastructure.Payments
                     AdmitCount: t.AdmitCount,
                     UnitPriceMinor: t.PriceMinor,
                     VatRate: t.VATRate,
-                    LineTotalMinor: lineTotal));
+                    LineTotalMinor: discountedGross));
             }
 
-            order.TotalAmount = totalMinor / 100m;
+            var payableMinor = grossTotalMinor - discountTotalMinor;
+            order.DiscountMinor = discountTotalMinor;
+            order.TotalAmount = payableMinor / 100m;
 
             var payment = new Payment
             {
@@ -164,18 +238,20 @@ namespace DJDiP.Infrastructure.Payments
                 OrderId = order.Id,
                 Amount = order.TotalAmount,
                 Currency = "NOK",
-                PaymentMethod = provider.Name,
-                Provider = provider.Name,
+                PaymentMethod = chosenProvider.Name,
+                Provider = chosenProvider.Name,
                 ProviderReference = reference,        // == Order.Reference; UNIQUE
                 IdempotencyKey = reference,
+                PromotionCodeId = order.PromotionCodeId,
                 Status = PaymentStatus.Created,        // persisted BEFORE InitiateAsync
                 PaymentDate = now,
-                AuthorizedAmountMinor = 0
+                AuthorizedAmountMinor = 0,
+                AttemptNo = 1
             };
 
-            // Oversell-safe reservation + persistence in one transaction. The conditional
-            // UPDATE is the real backstop (the DB CHECK constraint is the second). Quoted
-            // identifiers keep it valid on both SQLite (dev) and PostgreSQL (prod).
+            // Oversell-safe reservation + promo reservation + persistence in ONE transaction.
+            // The conditional UPDATEs are the real backstops (the DB CHECK / UNIQUE indexes are
+            // the second). Quoted identifiers keep them valid on SQLite (dev) and PostgreSQL.
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
             foreach (var r in requested)
@@ -193,20 +269,80 @@ namespace DJDiP.Infrastructure.Payments
                 }
             }
 
+            // Promo usage RESERVATION (design §3.1): atomic CAS on UsageCount vs MaxRedemptions
+            // — the same oversell-style guard inventory uses. 0 rows ⇒ the code exhausted
+            // between validate and here ⇒ roll the WHOLE tx back (holds too) and 409.
+            if (promo is { Ok: true } && promo.PromoCodeId is { } promoId)
+            {
+                var reserved = await _db.Database.ExecuteSqlInterpolatedAsync(
+                    $@"UPDATE ""PromotionCodes""
+                       SET ""UsageCount"" = ""UsageCount"" + 1
+                       WHERE ""Id"" = {promoId}
+                         AND ""IsActive"" = {true}
+                         AND (""MaxRedemptions"" IS NULL OR ""UsageCount"" < ""MaxRedemptions"")", ct);
+
+                if (reserved != 1)
+                {
+                    await tx.RollbackAsync(ct);
+                    throw new InvalidOperationException("This code is no longer available.");
+                }
+
+                // Audit + per-user-limit row. The UNIQUE(OrderId) index is the backstop.
+                _db.Set<PromoRedemption>().Add(new PromoRedemption
+                {
+                    Id = Guid.NewGuid(),
+                    PromoCodeId = promoId,
+                    OrderId = order.Id,
+                    UserId = actingUserId,
+                    Status = PromoRedemptionStatus.Reserved,
+                    CreatedAt = now
+                });
+            }
+
             _db.Orders.Add(order);
             _db.Payments.Add(payment);
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);   // Reference + Payment(Created) durable BEFORE initiate
 
+            var summary = new OrderSummary(
+                Reference: reference,
+                Lines: summaryLines,
+                SubtotalMinor: subtotalMinor,
+                VatMinor: vatMinor,
+                TotalMinor: payableMinor,
+                Currency: "NOK");
+
+            // Zero-total (100%-discount) order (design §3.1/§8): a free order is legal. Skip
+            // InitiateAsync entirely and finalize through the SAME FinalizeAsync path via a
+            // synthesized free-capture event (dedup + CAS + promo consume all apply). The
+            // redirect is the normal return URL with the reference appended, so the frontend
+            // flow is identical. NOTE: a reconcile racing this may call the provider's
+            // GetStatus for a payment that was never initiated and error transiently; the
+            // next tick sees the order already Captured and is a clean no-op.
+            if (payableMinor == 0)
+            {
+                var freeEvent = new PaymentEvent(
+                    OrderRef: reference,
+                    PspRef: "free-" + reference,
+                    Type: PaymentEventType.Captured,
+                    Amount: new Money(0, "NOK"),
+                    OccurredAt: DateTime.UtcNow,
+                    RawPayload: "{\"free\":true}");
+                await FinalizeAsync(freeEvent, ct);
+
+                var freeSep = _opts.CheckoutReturnUrl.Contains('?') ? '&' : '?';
+                var freeRedirect = $"{_opts.CheckoutReturnUrl}{freeSep}reference={Uri.EscapeDataString(reference)}";
+                return new CreatePaymentResult(summary, freeRedirect);
+            }
+
             // Provider initiate (idempotent recovery via GetStatusAsync on failure).
-            var sep = _opts.CheckoutReturnUrl.Contains('?') ? '&' : '?';
             var returnUrl = _opts.CheckoutReturnUrl;
             InitiateResult init;
             try
             {
-                init = await provider.InitiateAsync(new InitiateRequest(
+                init = await chosenProvider.InitiateAsync(new InitiateRequest(
                     OrderRef: reference,
-                    Amount: new Money(totalMinor, "NOK"),
+                    Amount: new Money(payableMinor, "NOK"),
                     ReturnUrl: returnUrl,
                     IdempotencyKey: reference,
                     Description: $"Klubn tickets {reference}",
@@ -222,13 +358,200 @@ namespace DJDiP.Infrastructure.Payments
             payment.LastSyncedAt = now;
             await _db.SaveChangesAsync(ct);
 
+            return new CreatePaymentResult(summary, init.RedirectUrl);
+        }
+
+        // ---- Retry (multi-attempt; design §3.5/§6) --------------------------------
+
+        public async Task<CreatePaymentResult> RetryPaymentAsync(
+            string reference,
+            string? provider,
+            string actingUserId,
+            CancellationToken ct)
+        {
+            if (string.IsNullOrEmpty(actingUserId))
+                throw new InvalidOperationException("Authentication required to buy tickets.");
+
+            var order = await _db.Orders
+                .Include(o => o.Holds)
+                .Include(o => o.OrderItems)
+                .Include(o => o.Payments)
+                .FirstOrDefaultAsync(o => o.Reference == reference, ct);
+
+            if (order is null)
+                throw new InvalidOperationException("Order not found.");
+            if (order.UserId != actingUserId)
+                throw new InvalidOperationException("You can only retry your own order.");
+
+            // Reject if already paid (design §3.5 step 4).
+            if (order.Payments.Any(p => p.Status == PaymentStatus.Captured) ||
+                order.Status is OrderStatus.Paid or OrderStatus.Fulfilled or OrderStatus.Refunded)
+                throw new InvalidOperationException("This order is already paid.");
+
+            // Provider choice for the new attempt (null ⇒ default; IsEnabled-checked).
+            var resolvedName = string.IsNullOrWhiteSpace(provider)
+                ? _registry.DefaultProvider
+                : provider;
+            if (!_registry.IsEnabled(resolvedName))
+                throw new InvalidOperationException("Unknown payment provider.");
+            var chosenProvider = _registry.Resolve(resolvedName);
+
+            // Best-effort cancel the latest non-terminal attempt (design §3.5 step 4). Its OWN
+            // provider — never the new one. Cancel failure is logged and ignored.
+            var latest = order.Payments
+                .OrderByDescending(p => p.AttemptNo)
+                .FirstOrDefault();
+            if (latest is not null &&
+                latest.Status is PaymentStatus.Created or PaymentStatus.Authorized)
+            {
+                try
+                {
+                    var prevProvider = _registry.Resolve(latest.Provider);
+                    await prevProvider.CancelAsync(latest.ProviderReference, ct);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "Retry: cancel of previous attempt {Reference} failed; continuing.", latest.ProviderReference);
+                }
+                latest.Status = PaymentStatus.Aborted;
+            }
+
+            var now = DateTime.UtcNow;
+            var attemptNo = order.Payments.Count == 0 ? 1 : order.Payments.Max(p => p.AttemptNo) + 1;
+            var attemptRef = $"{order.Reference}-r{attemptNo}";
+
+            // Re-reserve released holds + the promo reservation, and create the new Payment row
+            // BEFORE InitiateAsync — all inside one transaction (the seam invariant: a Created
+            // Payment row exists before we ever ask a provider to start).
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+            foreach (var hold in order.Holds)
+            {
+                if (hold.Status == TicketHoldStatus.Active)
+                    continue; // still held; nothing to re-reserve
+
+                var affected = await _db.Database.ExecuteSqlInterpolatedAsync(
+                    $@"UPDATE ""TicketTypes""
+                       SET ""QuantityHeld"" = ""QuantityHeld"" + {hold.Quantity}
+                       WHERE ""Id"" = {hold.TicketTypeId}
+                         AND (""Capacity"" - ""QuantitySold"" - ""QuantityHeld"") >= {hold.Quantity}", ct);
+
+                if (affected != 1)
+                {
+                    await tx.RollbackAsync(ct);
+                    throw new InvalidOperationException("Tickets for this order are sold out — the hold expired and could not be re-reserved.");
+                }
+                hold.Status = TicketHoldStatus.Active;
+            }
+
+            // Re-reserve the promo if it was released by the sweeper/expiry. Totals were
+            // computed WITH the discount, so we must NOT silently drop it — hard error if the
+            // code is no longer available (design §3.5).
+            if (order.PromotionCodeId is { } promoId)
+            {
+                var redemption = await _db.Set<PromoRedemption>()
+                    .FirstOrDefaultAsync(rd => rd.OrderId == order.Id, ct);
+                if (redemption is not null && redemption.Status == PromoRedemptionStatus.Released)
+                {
+                    var reserved = await _db.Database.ExecuteSqlInterpolatedAsync(
+                        $@"UPDATE ""PromotionCodes""
+                           SET ""UsageCount"" = ""UsageCount"" + 1
+                           WHERE ""Id"" = {promoId}
+                             AND ""IsActive"" = {true}
+                             AND (""MaxRedemptions"" IS NULL OR ""UsageCount"" < ""MaxRedemptions"")", ct);
+
+                    if (reserved != 1)
+                    {
+                        await tx.RollbackAsync(ct);
+                        throw new InvalidOperationException("This code is no longer available.");
+                    }
+                    redemption.Status = PromoRedemptionStatus.Reserved;
+                }
+            }
+
+            // Amount derived from the ORDER's line items (gross − per-line discount), not from
+            // the decimal TotalAmount, to avoid a decimal→minor round-trip rounding drift.
+            var payableMinor = order.OrderItems.Sum(i => i.LineTotalMinor - i.DiscountMinor);
+
+            var payment = new Payment
+            {
+                Id = Guid.NewGuid(),
+                OrderId = order.Id,
+                Amount = order.TotalAmount,
+                Currency = "NOK",
+                PaymentMethod = chosenProvider.Name,
+                Provider = chosenProvider.Name,
+                ProviderReference = attemptRef,       // "{Reference}-rN"; UNIQUE
+                IdempotencyKey = attemptRef,
+                PromotionCodeId = order.PromotionCodeId,
+                Status = PaymentStatus.Created,
+                PaymentDate = now,
+                AuthorizedAmountMinor = 0,
+                AttemptNo = attemptNo
+            };
+            _db.Payments.Add(payment);
+
+            // Fresh hold window for the new attempt (holds belong to the ORDER, design §3.5).
+            order.Status = OrderStatus.Pending;
+            order.HoldExpiresAt = now.AddMinutes(_opts.HoldMinutes);
+            foreach (var hold in order.Holds.Where(h => h.Status == TicketHoldStatus.Active))
+                hold.ExpiresAt = order.HoldExpiresAt.Value;
+
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            // Rebuild the order summary from OrderItems (+ ticket-type names) for the payload.
+            var itemTypeIds = order.OrderItems.Select(i => i.TicketTypeId).Distinct().ToList();
+            var typeNames = await _db.TicketTypes
+                .Where(t => itemTypeIds.Contains(t.Id))
+                .ToDictionaryAsync(t => t.Id, t => new { t.Name, t.AdmitCount }, ct);
+
+            long subtotalMinor = 0, vatMinor = 0;
+            var summaryLines = new List<OrderLineSummary>();
+            foreach (var item in order.OrderItems)
+            {
+                var discountedGross = item.LineTotalMinor - item.DiscountMinor;
+                var net = (long)Math.Round(discountedGross / (1m + item.UnitVatRate), MidpointRounding.AwayFromZero);
+                subtotalMinor += net;
+                vatMinor += discountedGross - net;
+                typeNames.TryGetValue(item.TicketTypeId, out var info);
+                summaryLines.Add(new OrderLineSummary(
+                    TicketTypeName: info?.Name ?? "Ticket",
+                    Quantity: item.Quantity,
+                    AdmitCount: info?.AdmitCount ?? 1,
+                    UnitPriceMinor: item.UnitPriceMinor,
+                    VatRate: item.UnitVatRate,
+                    LineTotalMinor: discountedGross));
+            }
+
             var summary = new OrderSummary(
-                Reference: reference,
+                Reference: order.Reference,
                 Lines: summaryLines,
                 SubtotalMinor: subtotalMinor,
                 VatMinor: vatMinor,
-                TotalMinor: totalMinor,
+                TotalMinor: payableMinor,
                 Currency: "NOK");
+
+            InitiateResult init;
+            try
+            {
+                init = await chosenProvider.InitiateAsync(new InitiateRequest(
+                    OrderRef: attemptRef,
+                    Amount: new Money(payableMinor, "NOK"),
+                    ReturnUrl: _opts.CheckoutReturnUrl,
+                    IdempotencyKey: attemptRef,
+                    Description: $"Klubn tickets {order.Reference}",
+                    CustomerEmail: order.CustomerEmail), ct);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Retry provider initiate failed for {AttemptRef}; payment persisted as Created for reconcile.", attemptRef);
+                throw new InvalidOperationException("Could not start payment. Please try again.");
+            }
+
+            payment.ProviderPspReference = init.ProviderReference;
+            payment.LastSyncedAt = now;
+            await _db.SaveChangesAsync(ct);
 
             return new CreatePaymentResult(summary, init.RedirectUrl);
         }
@@ -343,7 +666,8 @@ namespace DJDiP.Infrastructure.Payments
             // Money sanity guard (mirrors the H1 reconcile guard): a verified event can
             // still carry drifted values (settlement-currency change, Dashboard-side
             // partial capture). Wrong currency never issues; an amount drift issues from
-            // DB truth but is logged loudly for reconciliation.
+            // DB truth but is logged loudly for reconciliation. A free (zero-total) order
+            // legitimately carries amount 0 — the expected/actual both compute to 0.
             if (!string.Equals(ev.Amount.Currency, payment.Currency, StringComparison.OrdinalIgnoreCase))
             {
                 _log.LogError("CaptureAndIssue: currency mismatch for {Reference} (event {EventCurrency}, payment {PaymentCurrency}); NOT issuing.",
@@ -363,12 +687,12 @@ namespace DJDiP.Infrastructure.Payments
 
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
-            // EXACTLY-ONCE GUARD (prevents double ticket issuance). Two finalize paths
-            // can both clear layer-1 dedup when they carry different PspRefs (e.g. a real
-            // webhook vs the status-poll/sandbox synthetic ref). This atomic compare-and-
-            // swap on Payment.Status is the real guard: the first transaction to flip the
-            // row to Captured wins and issues; any concurrent/late finalizer sees 0 rows
-            // affected and bails WITHOUT issuing. Row-level locking serializes the racers.
+            // EXACTLY-ONCE GUARD — LAYER 1 (payment-level CAS). Two finalize paths can both
+            // clear layer-0 dedup when they carry different PspRefs (e.g. a real webhook vs the
+            // status-poll/sandbox synthetic ref). This atomic compare-and-swap on
+            // Payment.Status is the per-attempt guard: the first transaction to flip THIS row
+            // to Captured wins; a concurrent/late finalizer of the SAME attempt sees 0 rows and
+            // bails. Row-level locking serializes the racers.
             var claimed = await _db.Database.ExecuteSqlInterpolatedAsync(
                 $@"UPDATE ""Payments"" SET ""Status"" = {(int)PaymentStatus.Captured}
                    WHERE ""Id"" = {payment.Id} AND ""Status"" <> {(int)PaymentStatus.Captured}", ct);
@@ -376,6 +700,55 @@ namespace DJDiP.Infrastructure.Payments
             {
                 await tx.RollbackAsync(ct);
                 _log.LogInformation("CaptureAndIssue: {Reference} already captured by another path; no-op.", order.Reference);
+                return;
+            }
+
+            // EXACTLY-ONCE GUARD — LAYER 2 (order-level CAS, design §3.5). With multi-attempt
+            // payments, two DIFFERENT attempts could each clear the payment-level CAS (e.g. the
+            // user pays in two tabs, or a stale redirect for attempt 1 completes after attempt 2
+            // succeeded). This CAS on the ORDER makes fulfillment exactly-once across ALL
+            // attempts: the first to flip the order to Fulfilled issues; any other attempt sees
+            // 0 rows, rolls back its issue work, and (money WAS taken) marks itself Captured,
+            // logs CRITICAL, and best-effort auto-refunds.
+            var orderClaimed = await _db.Database.ExecuteSqlInterpolatedAsync(
+                $@"UPDATE ""Orders"" SET ""Status"" = {(int)OrderStatus.Fulfilled}
+                   WHERE ""Id"" = {order.Id}
+                     AND ""Status"" NOT IN ({(int)OrderStatus.Fulfilled}, {(int)OrderStatus.Refunded})", ct);
+            if (orderClaimed != 1)
+            {
+                // Another attempt already fulfilled this order. Roll back the issue work, but
+                // the money for THIS attempt was captured by the provider — record that truth.
+                await tx.RollbackAsync(ct);
+
+                payment.Status = PaymentStatus.Captured;
+                payment.CapturedAmountMinor = ev.Amount.AmountMinor;
+                payment.ProviderPspReference = ev.PspRef ?? payment.ProviderPspReference;
+                payment.LastSyncedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+
+                _log.LogCritical(
+                    "CaptureAndIssue: DUPLICATE capture for order {Reference} (attempt {AttemptRef}) — order already fulfilled by another attempt; auto-refunding {Minor} {Currency}.",
+                    order.Reference, payment.ProviderReference, ev.Amount.AmountMinor, ev.Amount.Currency);
+
+                // Best-effort auto-refund via THIS payment's provider (design §3.5). A refund
+                // failure stays CRITICAL-logged for the reconcile runbook — it never throws out
+                // of FinalizeAsync (the webhook must still 200).
+                if (ev.Amount.AmountMinor > 0)
+                {
+                    try
+                    {
+                        var prov = _registry.Resolve(payment.Provider);
+                        await prov.RefundAsync(
+                            payment.ProviderReference, ev.Amount,
+                            payment.ProviderReference + "-dup-refund", ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogCritical(ex,
+                            "CaptureAndIssue: auto-refund FAILED for duplicate capture {AttemptRef} — manual reconcile required.",
+                            payment.ProviderReference);
+                    }
+                }
                 return;
             }
 
@@ -391,7 +764,37 @@ namespace DJDiP.Infrastructure.Payments
                 hold.Status = TicketHoldStatus.Committed;
             }
 
-            // Issue one Ticket per unit; each admits AdmitCount people.
+            // Promo CONSUMPTION (design §3.1/§8): make the reservation permanent inside the
+            // issue transaction. Reserved → Consumed. If the sweeper RACED us and already
+            // Released it (§8: "Payment succeeds but promo row says Released"), re-consume it
+            // and unconditionally re-increment UsageCount so the discount the customer received
+            // is correctly accounted — the customer is never punished for our timing. A missing
+            // redemption row never blocks issuance.
+            if (order.PromotionCodeId is { } promoId)
+            {
+                var redemption = await _db.Set<PromoRedemption>()
+                    .FirstOrDefaultAsync(rd => rd.OrderId == order.Id, ct);
+                if (redemption is null)
+                {
+                    _log.LogWarning("CaptureAndIssue: order {Reference} has PromotionCodeId but no redemption row; continuing.", order.Reference);
+                }
+                else if (redemption.Status == PromoRedemptionStatus.Reserved)
+                {
+                    redemption.Status = PromoRedemptionStatus.Consumed;
+                }
+                else if (redemption.Status == PromoRedemptionStatus.Released)
+                {
+                    redemption.Status = PromoRedemptionStatus.Consumed;
+                    await _db.Database.ExecuteSqlInterpolatedAsync(
+                        $@"UPDATE ""PromotionCodes"" SET ""UsageCount"" = ""UsageCount"" + 1
+                           WHERE ""Id"" = {promoId}", ct);
+                    _log.LogWarning("CaptureAndIssue: promo redemption for {Reference} was Released (sweeper race); re-consumed and re-incremented UsageCount.", order.Reference);
+                }
+            }
+
+            // Issue one Ticket per unit; each admits AdmitCount people. Pricing reflects the
+            // per-line discount: the discounted unit gross drives BasePrice/VAT/Total so the
+            // ticket shows what the buyer actually paid.
             foreach (var item in order.OrderItems)
             {
                 var type = await _db.TicketTypes.FirstOrDefaultAsync(t => t.Id == item.TicketTypeId, ct);
@@ -404,7 +807,10 @@ namespace DJDiP.Infrastructure.Payments
                 else
                     expiryEpoch = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeSeconds();
 
-                var unitGross = item.UnitPriceMinor / 100m;
+                // Discounted per-unit gross (allocate the line discount evenly over its units).
+                var discountedLineGross = item.LineTotalMinor - item.DiscountMinor;
+                var unitGrossMinor = item.Quantity > 0 ? discountedLineGross / item.Quantity : discountedLineGross;
+                var unitGross = unitGrossMinor / 100m;
                 var vatAmount = unitGross - Math.Round(unitGross / (1m + item.UnitVatRate), 2, MidpointRounding.AwayFromZero);
 
                 for (var n = 0; n < item.Quantity; n++)
@@ -439,6 +845,9 @@ namespace DJDiP.Infrastructure.Payments
             payment.CapturedAmountMinor = ev.Amount.AmountMinor;
             payment.ProviderPspReference = ev.PspRef ?? payment.ProviderPspReference;
             payment.LastSyncedAt = DateTime.UtcNow;
+            // The order-level CAS already flipped Status to Fulfilled in the DB; keep the
+            // in-memory entity (loaded before the raw UPDATE) consistent so SaveChanges and any
+            // later read agree.
             order.Status = OrderStatus.Fulfilled;
             order.HoldExpiresAt = null;
 
@@ -447,6 +856,18 @@ namespace DJDiP.Infrastructure.Payments
 
             _log.LogInformation("Issued tickets for order {Reference} ({Count} items).",
                 order.Reference, order.OrderItems.Count);
+
+            // Post-commit confirmation email (design §4.4) — best-effort, belt-and-braces
+            // try/catch here too (the service is also exception-safe internally). A send
+            // failure NEVER fails the finalize: tickets are in the wallet, the webhook 200s.
+            try
+            {
+                await _confirmation.SendAsync(order.Id, ct);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "CaptureAndIssue: confirmation email send failed for {Reference} (non-fatal).", order.Reference);
+            }
         }
 
         private async Task ReleaseAsync(Payment payment, PaymentEvent ev, CancellationToken ct)
@@ -471,6 +892,11 @@ namespace DJDiP.Infrastructure.Payments
                     : TicketHoldStatus.Released;
             }
 
+            // Release the promo reservation alongside the holds (design §3.1/§6): decrement
+            // UsageCount (floor 0) and flip the redemption to Released, but ONLY when it is
+            // still Reserved — never undo a Consumed redemption (that order was paid).
+            await ReleasePromoReservationAsync(order, ct);
+
             payment.Status = ev.Type switch
             {
                 PaymentEventType.Failed => PaymentStatus.Failed,
@@ -484,6 +910,27 @@ namespace DJDiP.Infrastructure.Payments
 
             await _db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
+        }
+
+        // Shared promo-release used by ReleaseAsync (and reused conceptually by the sweeper,
+        // which drives the SAME FinalizeAsync(Expired)→ReleaseAsync path). Decrements
+        // UsageCount with a floor of 0 and flips a STILL-Reserved redemption to Released. Must
+        // run inside the caller's open transaction (it issues a raw UPDATE + mutates a tracked
+        // entity; the caller commits). No-op when the order has no promo or it isn't Reserved.
+        private async Task ReleasePromoReservationAsync(Order order, CancellationToken ct)
+        {
+            if (order.PromotionCodeId is not { } promoId) return;
+
+            var redemption = await _db.Set<PromoRedemption>()
+                .FirstOrDefaultAsync(rd => rd.OrderId == order.Id, ct);
+            if (redemption is null || redemption.Status != PromoRedemptionStatus.Reserved)
+                return;
+
+            await _db.Database.ExecuteSqlInterpolatedAsync(
+                $@"UPDATE ""PromotionCodes""
+                   SET ""UsageCount"" = CASE WHEN ""UsageCount"" > 0 THEN ""UsageCount"" - 1 ELSE 0 END
+                   WHERE ""Id"" = {promoId}", ct);
+            redemption.Status = PromoRedemptionStatus.Released;
         }
     }
 }

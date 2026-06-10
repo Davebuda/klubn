@@ -15,11 +15,18 @@ namespace DJDiP.Infrastructure.Payments
     // abandoned checkouts leak QuantityHeld forever and tiers read as sold out — hit
     // live on 2026-06-10 during the first Vipps TEST run.
     //
-    // SAFETY RULE: only orders whose payment is still Created are swept. An Authorized
-    // payment means the buyer's money is reserved and a capture may be in flight (the
-    // return-page reconcile or, later, the P6 webhook) — sweeping those would race the
-    // capture. Expiry of authorized-but-never-captured payments is a P6/reconciliation
-    // concern, not the sweeper's.
+    // SAFETY RULE: only orders where NO payment attempt has progressed beyond Created are
+    // swept. An Authorized (or Captured) attempt means the buyer's money is reserved and a
+    // capture may be in flight (the return-page reconcile or the webhook) — sweeping those
+    // would race the capture. With multi-attempt payments (C4, design §3.4) an order can have
+    // several Payment rows; the sweepable predicate is "the order has at least one Created
+    // attempt AND none beyond Created" — checked per order, not per single joined payment.
+    // Expiry of authorized-but-never-captured payments is a reconciliation concern.
+    //
+    // C4 (design §6): the sweep drives FinalizeAsync(Expired) → ReleaseAsync, which now ALSO
+    // releases the promo reservation (decrement UsageCount floor 0, redemption → Released)
+    // alongside the inventory holds — no extra work here; passing a Created attempt's
+    // reference is sufficient.
     //
     // The sweep drives the SAME idempotent FinalizeAsync(Expired) path as webhooks and
     // reconcile, so a concurrent real webhook/poll can never double-process: layer-1
@@ -79,18 +86,29 @@ namespace DJDiP.Infrastructure.Payments
 
             var cutoff = DateTime.UtcNow.AddMinutes(-_opts.SweepGraceMinutes);
 
-            // Candidates: order still Pending, hold window past, and the payment never
-            // progressed beyond Created (buyer abandoned before/at the provider page).
-            var references = await (
+            // Candidates: order still Pending, hold window past, and NO attempt has progressed
+            // beyond Created (buyer abandoned before/at the provider page). Multi-attempt-safe:
+            // the order must have at least one Created attempt AND zero attempts in any other
+            // status. We pick one Created attempt's reference to drive the release path.
+            var createdStatus = PaymentStatus.Created;
+            var sweepableOrderIds = await (
                 from o in db.Orders
-                join p in db.Payments on o.Id equals p.OrderId
                 where o.Status == OrderStatus.Pending
                       && o.HoldExpiresAt != null
                       && o.HoldExpiresAt < cutoff
-                      && p.Status == PaymentStatus.Created
-                      && p.ProviderReference != null
-                select p.ProviderReference!)
+                      && o.Payments.Any(p => p.Status == createdStatus)
+                      && o.Payments.All(p => p.Status == createdStatus)
+                orderby o.HoldExpiresAt   // oldest-expired first; deterministic batch boundary
+                select o.Id)
                 .Take(50) // bounded batch per tick; the next tick takes the rest
+                .ToListAsync(ct);
+
+            var references = await db.Payments
+                .Where(p => sweepableOrderIds.Contains(p.OrderId)
+                            && p.Status == createdStatus
+                            && p.ProviderReference != null)
+                .GroupBy(p => p.OrderId)
+                .Select(g => g.Min(p => p.ProviderReference!)) // one deterministic ref per order
                 .ToListAsync(ct);
 
             foreach (var reference in references)

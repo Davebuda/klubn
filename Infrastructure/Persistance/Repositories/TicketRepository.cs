@@ -72,5 +72,14 @@ namespace DJDiP.Infrastructure.Persistance.Repositories
                 .Where(t => t.PurchaseDate >= startDate && t.PurchaseDate <= endDate)
                 .ToListAsync();
         }
+
+        public async Task<IEnumerable<Ticket>> GetTicketsByOrderAsync(Guid orderId, CancellationToken ct)
+        {
+            // Reach the order via the issuance link OrderItem.OrderId. TRACKED (no Include,
+            // no AsNoTracking) so the caller can stamp confirmation fields and SaveChanges.
+            return await _dbSet
+                .Where(t => t.OrderItem != null && t.OrderItem.OrderId == orderId)
+                .ToListAsync(ct);
+        }
     }
 } 

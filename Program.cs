@@ -187,6 +187,10 @@ builder.Services.Configure<DJDiP.Infrastructure.Payments.TicketingOptions>(
     builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.TicketingOptions.SectionName));
 builder.Services.Configure<DJDiP.Application.Services.QrOptions>(
     builder.Configuration.GetSection(DJDiP.Application.Services.QrOptions.SectionName));
+// AppSettings (BaseUrl / FrontendUrl) — FrontendUrl backs links in outbound email
+// (confirmation wallet link, checkout-orchestration §4.4).
+builder.Services.Configure<DJDiP.Application.Options.AppSettings>(
+    builder.Configuration.GetSection(DJDiP.Application.Options.AppSettings.SectionName));
 
 // QR door-scan token signing (pure HMAC, provider-agnostic).
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IQrTokenService,
@@ -312,6 +316,16 @@ builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProviderRegistry
     new DJDiP.Infrastructure.Payments.PaymentProviderRegistry(sp, enabledProviders, defaultProvider));
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProviderCatalog>(sp =>
     sp.GetRequiredService<DJDiP.Application.Interfaces.IPaymentProviderRegistry>());
+
+// Checkout domain services (checkout-orchestration C2/C4). Pure validation/quote +
+// the post-commit confirmation email — the orchestrator depends on IPromoCodeService and
+// IOrderConfirmationService, so these MUST be registered before it resolves.
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IPromoCodeService,
+    DJDiP.Application.Services.PromoCodeService>();
+builder.Services.AddScoped<DJDiP.Application.Interfaces.ICheckoutQuoteService,
+    DJDiP.Application.Services.CheckoutQuoteService>();
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IOrderConfirmationService,
+    DJDiP.Application.Services.OrderConfirmationService>();
 
 // Real orchestration lives in Infrastructure (EF access) — NOT Application.
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentOrchestrator,
@@ -1091,8 +1105,11 @@ public class Mutation
             .ToList();
         try
         {
+            // C4: promoCode/provider args are exposed on the GraphQL surface in C5; until then
+            // the resolver passes null/null (default provider, no promo) — behaviour unchanged.
             var result = await orchestrator.CreatePaymentAsync(
-                input.EventId, lines, input.CustomerEmail, userId, default);
+                input.EventId, lines, input.CustomerEmail, userId,
+                promoCode: null, provider: null, default);
             return new DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload(
                 result.Order, result.RedirectUrl, provider.Name);
         }
