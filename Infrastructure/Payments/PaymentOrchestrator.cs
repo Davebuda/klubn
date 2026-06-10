@@ -227,12 +227,19 @@ namespace DJDiP.Infrastructure.Payments
 
         public async Task FinalizeAsync(PaymentEvent ev, CancellationToken ct)
         {
-            var payment = await _db.Payments
-                .FirstOrDefaultAsync(p => p.ProviderReference == ev.OrderRef, ct);
+            // Charge-level events (e.g. Stripe charge.refunded) carry no order metadata,
+            // so ev.OrderRef arrives empty — fall back to the PSP reference we stored at
+            // authorize/capture time. One lookup path, two keys; never a second issue path.
+            var payment = !string.IsNullOrEmpty(ev.OrderRef)
+                ? await _db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == ev.OrderRef, ct)
+                : null;
+            if (payment is null && !string.IsNullOrEmpty(ev.PspRef))
+                payment = await _db.Payments.FirstOrDefaultAsync(p => p.ProviderPspReference == ev.PspRef, ct);
 
             if (payment is null)
             {
-                _log.LogWarning("FinalizeAsync: no payment for OrderRef {OrderRef}; ignoring.", ev.OrderRef);
+                _log.LogWarning("FinalizeAsync: no payment for OrderRef {OrderRef} / PspRef {PspRef}; ignoring.",
+                    ev.OrderRef, ev.PspRef);
                 return;
             }
 
@@ -308,6 +315,23 @@ namespace DJDiP.Infrastructure.Payments
                 _log.LogError("CaptureAndIssue: order {OrderId} missing.", payment.OrderId);
                 return;
             }
+
+            // Money sanity guard (mirrors the H1 reconcile guard): a verified event can
+            // still carry drifted values (settlement-currency change, Dashboard-side
+            // partial capture). Wrong currency never issues; an amount drift issues from
+            // DB truth but is logged loudly for reconciliation.
+            if (!string.Equals(ev.Amount.Currency, payment.Currency, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogError("CaptureAndIssue: currency mismatch for {Reference} (event {EventCurrency}, payment {PaymentCurrency}); NOT issuing.",
+                    payment.ProviderReference, ev.Amount.Currency, payment.Currency);
+                return;
+            }
+            var expectedMinor = payment.AuthorizedAmountMinor > 0
+                ? payment.AuthorizedAmountMinor
+                : (long)Math.Round(order.TotalAmount * 100m, MidpointRounding.AwayFromZero);
+            if (ev.Amount.AmountMinor != expectedMinor)
+                _log.LogWarning("CaptureAndIssue: captured amount {EventMinor} differs from expected {ExpectedMinor} for {Reference}.",
+                    ev.Amount.AmountMinor, expectedMinor, payment.ProviderReference);
 
             // Event start drives QR expiry (no explicit end time in the model).
             var eventIds = order.OrderItems.Select(i => i.EventId).Distinct().ToList();

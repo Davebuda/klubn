@@ -197,16 +197,9 @@ builder.Services.AddScoped<DJDiP.Application.Interfaces.IQrTokenService,
 // Vipps (P4) and Stripe are the same seam with a real PSP behind them. The orchestrator
 // and domain are identical under all three (design §3, L2).
 //
-// When Payments:Provider is UNSET we keep the original fallback EXACTLY: Vipps if its
-// creds are present, else Sandbox — so existing deployments behave unchanged.
-var activeProvider = builder.Configuration["Payments:Provider"];
-if (string.IsNullOrWhiteSpace(activeProvider))
-{
-    string[] vippsKeys = ["Vipps:ClientId", "Vipps:ClientSecret", "Vipps:SubscriptionKey", "Vipps:Msn"];
-    activeProvider = vippsKeys.All(k => !string.IsNullOrWhiteSpace(builder.Configuration[k]))
-        ? "Vipps"
-        : "Sandbox";
-}
+// When unset the default is Sandbox — going live with a real PSP must always be an
+// explicit config decision, never inferred from which credentials happen to be present.
+var activeProvider = builder.Configuration["Payments:Provider"] ?? "Sandbox";
 
 if (activeProvider.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
 {

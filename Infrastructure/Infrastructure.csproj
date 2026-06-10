@@ -16,6 +16,8 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.6" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.9" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.9" />
+    <!-- Stripe payment provider (third IPaymentProvider behind the seam; design §3). -->
+    <PackageReference Include="Stripe.net" Version="52.0.0" />
   </ItemGroup>
 
   <ItemGroup>

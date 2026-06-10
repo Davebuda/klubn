@@ -29,6 +29,9 @@ $keyMap = @{
     "VIPPS_BASE_URL"         = "Vipps__BaseUrl"
     "VIPPS_WEBHOOK_SECRET"   = "Vipps__WebhookSecret"
     "VIPPS_SYSTEM_NAME"      = "Vipps__SystemName"
+    "STRIPE_SECRET_KEY"      = "Stripe__SecretKey"
+    "STRIPE_WEBHOOK_SECRET"  = "Stripe__WebhookSecret"
+    "STRIPE_PUBLISHABLE_KEY" = "Stripe__PublishableKey"
     "EMAIL_ENABLED"          = "Email__Enabled"
     "EMAIL_SMTP_HOST"        = "Email__SmtpHost"
     "EMAIL_SMTP_PORT"        = "Email__SmtpPort"
@@ -73,6 +76,16 @@ if ($active -eq "Vipps") {
     if ($missing.Count -gt 0) {
         Write-Host "Missing Vipps TEST credentials in .env: $($missing -join ', ')" -ForegroundColor Yellow
         Write-Host "Fill the VIPPS_* lines in .env, or run:  .\scripts\run-dev.ps1 -Provider Sandbox" -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+if ($active -eq "Stripe") {
+    $missing = @("Stripe__SecretKey", "Stripe__WebhookSecret") |
+        Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }
+    if ($missing.Count -gt 0) {
+        Write-Host "Missing Stripe TEST credentials in .env: $($missing -join ', ')" -ForegroundColor Yellow
+        Write-Host "Fill the STRIPE_* lines in .env, or run:  .\scripts\run-dev.ps1 -Provider Sandbox" -ForegroundColor Yellow
         exit 1
     }
 }

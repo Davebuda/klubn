@@ -77,6 +77,11 @@ services:
       Vipps__BaseUrl: ${VIPPS_BASE_URL:-https://apitest.vipps.no}
       Vipps__WebhookSecret: ${VIPPS_WEBHOOK_SECRET:-}
       Vipps__SystemName: ${VIPPS_SYSTEM_NAME:-klubn}
+      # Stripe (third IPaymentProvider behind the seam; set PAYMENTS_PROVIDER=Stripe to go live).
+      # Same fail-fast posture as Vipps: startup fails if SecretKey/WebhookSecret are missing.
+      Stripe__SecretKey: ${STRIPE_SECRET_KEY:-}
+      Stripe__WebhookSecret: ${STRIPE_WEBHOOK_SECRET:-}
+      Stripe__PublishableKey: ${STRIPE_PUBLISHABLE_KEY:-}
       # Ticketing / payments runtime (P4-P9). The backend FAILS FAST at startup when
       # Payments__Provider=Vipps and any of the 4 Vipps creds above is missing.
       Payments__Provider: ${PAYMENTS_PROVIDER:-Sandbox}
