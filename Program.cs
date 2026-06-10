@@ -181,6 +181,8 @@ builder.Services.Configure<DJDiP.Infrastructure.Payments.Vipps.VippsOptions>(
     builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Vipps.VippsOptions.SectionName));
 builder.Services.Configure<DJDiP.Infrastructure.Payments.Sandbox.SandboxOptions>(
     builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Sandbox.SandboxOptions.SectionName));
+builder.Services.Configure<DJDiP.Infrastructure.Payments.Stripe.StripeOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Stripe.StripeOptions.SectionName));
 builder.Services.Configure<DJDiP.Infrastructure.Payments.TicketingOptions>(
     builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.TicketingOptions.SectionName));
 builder.Services.Configure<DJDiP.Application.Services.QrOptions>(
@@ -190,11 +192,22 @@ builder.Services.Configure<DJDiP.Application.Services.QrOptions>(
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IQrTokenService,
     DJDiP.Application.Services.QrTokenService>();
 
-// Active payment provider, selected by config "Payments:Provider" (default Sandbox).
-// Sandbox runs the full checkout->capture->issue->QR flow with NO Vipps creds; the
-// Vipps adapter (P4) is the same seam with the real ePayment API behind it. The
-// orchestrator and domain are identical under both.
-var activeProvider = builder.Configuration["Payments:Provider"] ?? "Sandbox";
+// Active payment provider, selected by config "Payments:Provider" = Vipps | Stripe |
+// Sandbox. Sandbox runs the full checkout->capture->issue->QR flow with NO PSP creds;
+// Vipps (P4) and Stripe are the same seam with a real PSP behind them. The orchestrator
+// and domain are identical under all three (design §3, L2).
+//
+// When Payments:Provider is UNSET we keep the original fallback EXACTLY: Vipps if its
+// creds are present, else Sandbox — so existing deployments behave unchanged.
+var activeProvider = builder.Configuration["Payments:Provider"];
+if (string.IsNullOrWhiteSpace(activeProvider))
+{
+    string[] vippsKeys = ["Vipps:ClientId", "Vipps:ClientSecret", "Vipps:SubscriptionKey", "Vipps:Msn"];
+    activeProvider = vippsKeys.All(k => !string.IsNullOrWhiteSpace(builder.Configuration[k]))
+        ? "Vipps"
+        : "Sandbox";
+}
+
 if (activeProvider.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
 {
     // Fail fast on missing credentials — a half-configured Vipps provider must never
@@ -210,6 +223,20 @@ if (activeProvider.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
     builder.Services.AddSingleton<DJDiP.Infrastructure.Payments.Vipps.VippsAccessTokenCache>();
     builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
         DJDiP.Infrastructure.Payments.Vipps.VippsPaymentProvider>();
+}
+else if (activeProvider.Equals("Stripe", StringComparison.OrdinalIgnoreCase))
+{
+    // Same fail-fast posture as Vipps: a half-configured Stripe provider must never
+    // reach a buyer. (Values come from env: Stripe__SecretKey etc.; see .env.example.)
+    string[] requiredStripeKeys = ["Stripe:SecretKey", "Stripe:WebhookSecret"];
+    var missing = requiredStripeKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
+    if (missing.Count > 0)
+        throw new InvalidOperationException(
+            $"Payments:Provider=Stripe but required config is missing: {string.Join(", ", missing)}. " +
+            "Set the Stripe__* environment variables (see .env.example).");
+
+    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+        DJDiP.Infrastructure.Payments.Stripe.StripePaymentProvider>();
 }
 else
     builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
@@ -1012,8 +1039,15 @@ public class Mutation
         [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
         [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
         [Service] AppDbContext db,
+        [Service] IWebHostEnvironment hostEnv,
         [Service] IHttpContextAccessor accessor)
     {
+        // HARD environment gate (prod-readiness): even if a production deploy is
+        // misconfigured with Payments:Provider=Sandbox, buyers must never be able
+        // to self-complete payments (= free tickets). Development-only, full stop.
+        if (!hostEnv.IsDevelopment())
+            throw new GraphQLException("Sandbox completion is only available in Development.");
+
         if (!provider.Name.Equals("Sandbox", StringComparison.OrdinalIgnoreCase))
             throw new GraphQLException("Sandbox completion is only available with the Sandbox provider.");
 
