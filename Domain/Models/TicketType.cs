@@ -37,6 +37,13 @@ namespace DJDiP.Domain.Models
         public TicketTypeStatus Status { get; set; } = TicketTypeStatus.Draft;
         public int SortOrder { get; set; }
 
+        // Hidden tier (checkout-orchestration design §3.2). Visibility is orthogonal to
+        // lifecycle Status: a hidden tier still moves Draft→OnSale→SoldOut. When
+        // IsHidden && Status==OnSale the tier is excluded from the public ticketTypes
+        // query and rejected at quote/create UNLESS the request carries a promo code
+        // with UnlocksHiddenTypes whose scope (event + type list) covers this tier.
+        public bool IsHidden { get; set; } = false;
+
         // Available = Capacity - QuantitySold - QuantityHeld (computed, not stored).
     }
 

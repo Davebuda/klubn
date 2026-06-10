@@ -15,7 +15,7 @@ namespace DJDiP.Infrastructure.Persistance.Repositories
             return await _dbSet
                 .Include(o => o.User)
                 .Include(o => o.OrderItems)
-                .Include(o => o.Payment)
+                .Include(o => o.Payments)
                 .Where(o => o.UserId == userId)
                 .ToListAsync();
         }
@@ -25,7 +25,7 @@ namespace DJDiP.Infrastructure.Persistance.Repositories
             return await _dbSet
                 .Include(o => o.User)
                 .Include(o => o.OrderItems)
-                .Include(o => o.Payment)
+                .Include(o => o.Payments)
                 .Where(o => o.Status == status)
                 .ToListAsync();
         }
@@ -35,7 +35,7 @@ namespace DJDiP.Infrastructure.Persistance.Repositories
             return await _dbSet
                 .Include(o => o.User)
                 .Include(o => o.OrderItems)
-                .Include(o => o.Payment)
+                .Include(o => o.Payments)
                 .Where(o => o.OrderDate >= startDate && o.OrderDate <= endDate)
                 .ToListAsync();
         }
@@ -46,7 +46,7 @@ namespace DJDiP.Infrastructure.Persistance.Repositories
                 .Include(o => o.User)
                 .Include(o => o.OrderItems)
                     .ThenInclude(oi => oi.Event)
-                .Include(o => o.Payment)
+                .Include(o => o.Payments)
                 .FirstOrDefaultAsync(o => o.Id == orderId);
         }
 
@@ -55,8 +55,8 @@ namespace DJDiP.Infrastructure.Persistance.Repositories
             return await _dbSet
                 .Include(o => o.User)
                 .Include(o => o.OrderItems)
-                .Include(o => o.Payment)
-                .Where(o => o.Payment != null)
+                .Include(o => o.Payments)
+                .Where(o => o.Payments.Any())
                 .ToListAsync();
         }
     }

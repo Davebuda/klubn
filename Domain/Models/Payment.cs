@@ -32,5 +32,13 @@ namespace DJDiP.Domain.Models
         public long RefundedAmountMinor { get; set; } = 0;
 
         public DateTime? LastSyncedAt { get; set; }              // last webhook/poll reconciliation
+
+        // Multi-attempt payments (checkout-orchestration design §3.4). The Payment row IS
+        // the PaymentAttempt; Order is now 1→N Payments. Attempt 1 keeps the bare
+        // ProviderReference = Order.Reference (backward compatible with every live row);
+        // retry N uses ProviderReference = "{Order.Reference}-r{N}" — unique, and valid
+        // under Vipps's reference rule ^[a-zA-Z0-9-]{8,64}$. FinalizeAsync already looks
+        // payments up by ProviderReference, so per-attempt webhook routing needs no change.
+        public int AttemptNo { get; set; } = 1;
     }
 }

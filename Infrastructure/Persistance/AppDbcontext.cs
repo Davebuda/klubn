@@ -25,6 +25,8 @@ namespace DJDiP.Infrastructure.Persistance
         public DbSet<OrderItem> OrderItems => Set<OrderItem>();
         public DbSet<Payment> Payments => Set<Payment>();
         public DbSet<PromotionCode> PromotionCodes => Set<PromotionCode>();
+        public DbSet<PromoCodeTicketType> PromoCodeTicketTypes => Set<PromoCodeTicketType>();
+        public DbSet<PromoRedemption> PromoRedemptions => Set<PromoRedemption>();
         public DbSet<Song> Songs => Set<Song>();
         public DbSet<Ticket> Tickets => Set<Ticket>();
         public DbSet<Venue> Venues => Set<Venue>();
@@ -100,11 +102,14 @@ namespace DJDiP.Infrastructure.Persistance
                 .WithMany(e => e.OrderItems)
                 .HasForeignKey(oi => oi.EventId);
 
-            // Payment
+            // Payment — Order 1→N Payments (multi-attempt, design §3.4). The FK on
+            // Payment.OrderId is unchanged; only the nav cardinality changed from 1:1
+            // to a collection. The UNIQUE index on Payments.ProviderReference (configured
+            // below) keeps attempt references distinct.
             modelBuilder.Entity<Payment>()
                 .HasOne(p => p.Order)
-                .WithOne(o => o.Payment)
-                .HasForeignKey<Payment>(p => p.OrderId);
+                .WithMany(o => o.Payments)
+                .HasForeignKey(p => p.OrderId);
 
             // DJTop10
             modelBuilder.Entity<DJTop10>()
@@ -227,6 +232,43 @@ namespace DJDiP.Infrastructure.Persistance
             modelBuilder.Entity<PaymentWebhookEvent>()
                 .HasIndex(w => new { w.Provider, w.ProviderPspReference, w.EventType })
                 .IsUnique();
+
+            // ========== CHECKOUT — Promo v2 (design §3.1, §7) ==========
+
+            // PromotionCode.Code — UNIQUE (uppercase-normalized). The correctness-critical
+            // guard behind "promo code unique" (§7).
+            modelBuilder.Entity<PromotionCode>()
+                .HasIndex(pc => pc.Code)
+                .IsUnique();
+
+            // PromoCodeTicketType — join table restricting a promo to listed tiers.
+            // Composite PK (PromoCodeId, TicketTypeId).
+            modelBuilder.Entity<PromoCodeTicketType>(b =>
+            {
+                b.HasKey(x => new { x.PromoCodeId, x.TicketTypeId });
+
+                b.HasOne<PromotionCode>()
+                    .WithMany(pc => pc.TicketTypes)
+                    .HasForeignKey(x => x.PromoCodeId)
+                    .OnDelete(DeleteBehavior.Cascade);
+
+                b.HasOne<TicketType>()
+                    .WithMany()
+                    .HasForeignKey(x => x.TicketTypeId)
+                    .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            // PromoRedemption — audit + per-user-limit. Status persisted as int (APPEND-ONLY).
+            modelBuilder.Entity<PromoRedemption>(b =>
+            {
+                b.Property(r => r.Status).HasConversion<int>();
+
+                // One redemption per order (§7).
+                b.HasIndex(r => r.OrderId).IsUnique();
+
+                // Per-user limit counting path (Reserved|Consumed rows for a user+code).
+                b.HasIndex(r => new { r.PromoCodeId, r.UserId });
+            });
 
             // ========== HIGHLIGHTS / PREVIOUS MOMENTS — EventHighlight ==========
             // Editorial recap of a PAST event. Two FKs to Event (recapped + optional

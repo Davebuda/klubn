@@ -17,5 +17,10 @@ namespace DJDiP.Domain.Models
         public long UnitPriceMinor { get; set; }    // snapshot of tier price at purchase
         public decimal UnitVatRate { get; set; }    // snapshot at purchase
         public long LineTotalMinor { get; set; }    // Quantity × UnitPriceMinor (gross)
+
+        // Per-line promo discount in minor units (øre), allocated via largest-remainder
+        // so the per-line parts sum exactly to Order.DiscountMinor. VAT is computed on the
+        // DISCOUNTED gross per line so per-line VAT reporting stays correct (design §3.3/§4.1).
+        public long DiscountMinor { get; set; } = 0;
     }
 }

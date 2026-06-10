@@ -172,6 +172,52 @@ namespace DJDiP.Infrastructure.Persistance
                         ""ReceivedAt"" TIMESTAMP NOT NULL DEFAULT NOW()
                       );
                       CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PaymentWebhookEvents_Dedup"" ON ""PaymentWebhookEvents""(""Provider"", ""ProviderPspReference"", ""EventType"");");
+
+                // ── Checkout orchestration (C1) — promo v2, hidden tiers, multi-attempt
+                // payments — prod schema evolution (same established pattern; design §7).
+                // Idempotent: ADD COLUMN / CREATE TABLE / CREATE INDEX IF NOT EXISTS.
+                // Types follow the Postgres dialect: BIGINT for *Minor (øre, long),
+                // TIMESTAMP for dates, BOOLEAN for flags, INTEGER for enums/counters.
+                // Back-filled columns carry NO FK constraints so legacy rows never block
+                // startup. The UNIQUE indexes (PromotionCodes.Code, PromoRedemptions.OrderId)
+                // are the correctness-critical invariants (§7). NB: the Order→Payments nav
+                // changed 1:1→1:N, so the old UNIQUE IX_Payments_OrderId is demoted to a
+                // plain index — drop-and-recreate idempotently (a second attempt per order
+                // must be insertable).
+                await context.Database.ExecuteSqlRawAsync(
+                    @"ALTER TABLE ""TicketTypes"" ADD COLUMN IF NOT EXISTS ""IsHidden"" BOOLEAN NOT NULL DEFAULT FALSE;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""Kind"" INTEGER NOT NULL DEFAULT 0;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""AmountMinor"" BIGINT NOT NULL DEFAULT 0;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""ValidFrom"" TIMESTAMP;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""MaxRedemptions"" INTEGER;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""MaxRedemptionsPerUser"" INTEGER;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""EventId"" UUID;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""UnlocksHiddenTypes"" BOOLEAN NOT NULL DEFAULT FALSE;
+                      ALTER TABLE ""PromotionCodes"" ADD COLUMN IF NOT EXISTS ""IsActive"" BOOLEAN NOT NULL DEFAULT TRUE;
+                      CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PromotionCodes_Code"" ON ""PromotionCodes""(""Code"");
+                      ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PromotionCodeId"" UUID;
+                      ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PromoCode"" TEXT;
+                      ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""DiscountMinor"" BIGINT NOT NULL DEFAULT 0;
+                      ALTER TABLE ""OrderItems"" ADD COLUMN IF NOT EXISTS ""DiscountMinor"" BIGINT NOT NULL DEFAULT 0;
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""AttemptNo"" INTEGER NOT NULL DEFAULT 1;
+                      DROP INDEX IF EXISTS ""IX_Payments_OrderId"";
+                      CREATE INDEX IF NOT EXISTS ""IX_Payments_OrderId"" ON ""Payments""(""OrderId"");
+                      CREATE TABLE IF NOT EXISTS ""PromoCodeTicketTypes"" (
+                        ""PromoCodeId"" UUID NOT NULL,
+                        ""TicketTypeId"" UUID NOT NULL,
+                        CONSTRAINT ""PK_PromoCodeTicketTypes"" PRIMARY KEY (""PromoCodeId"", ""TicketTypeId"")
+                      );
+                      CREATE INDEX IF NOT EXISTS ""IX_PromoCodeTicketTypes_TicketTypeId"" ON ""PromoCodeTicketTypes""(""TicketTypeId"");
+                      CREATE TABLE IF NOT EXISTS ""PromoRedemptions"" (
+                        ""Id"" UUID PRIMARY KEY,
+                        ""PromoCodeId"" UUID NOT NULL,
+                        ""OrderId"" UUID NOT NULL,
+                        ""UserId"" TEXT NOT NULL DEFAULT '',
+                        ""Status"" INTEGER NOT NULL DEFAULT 0,
+                        ""CreatedAt"" TIMESTAMP NOT NULL DEFAULT NOW()
+                      );
+                      CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PromoRedemptions_OrderId"" ON ""PromoRedemptions""(""OrderId"");
+                      CREATE INDEX IF NOT EXISTS ""IX_PromoRedemptions_PromoCodeId_UserId"" ON ""PromoRedemptions""(""PromoCodeId"", ""UserId"");");
             }
             catch { /* columns already exist or table doesn't exist yet (handled by EnsureCreated) */ }
 
