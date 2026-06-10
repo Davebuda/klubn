@@ -23,14 +23,17 @@ import pathlib
 import sys
 import urllib.request
 
+# Exact names per developer.vippsmobilepay.com/docs/APIs/webhooks-api/events/
+# (domain prefix is "epayments" PLURAL - the singular form is rejected with 400).
 EVENTS = [
-    "epayment.payment.created.v1",
-    "epayment.payment.authorized.v1",
-    "epayment.payment.captured.v1",
-    "epayment.payment.cancelled.v1",
-    "epayment.payment.expired.v1",
-    "epayment.payment.refunded.v1",
-    "epayment.payment.terminated.v1",
+    "epayments.payment.created.v1",
+    "epayments.payment.authorized.v1",
+    "epayments.payment.captured.v1",
+    "epayments.payment.cancelled.v1",
+    "epayments.payment.expired.v1",
+    "epayments.payment.refunded.v1",
+    "epayments.payment.terminated.v1",
+    "epayments.payment.aborted.v1",
 ]
 DEFAULT_URL = "https://klubn.no/api/webhooks/payments/vipps"
 

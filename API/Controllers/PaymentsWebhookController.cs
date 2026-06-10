@@ -14,13 +14,10 @@ namespace DJDiP.API.Controllers;
 // the same idempotent path the checkout-return poll (reconcileTicketOrder) drives,
 // so webhook + poll can never double-issue (layer-1 dedup + the CAS guard).
 //
-// Vipps subscription registration is a DEPLOY-TIME task (needs the public URL):
-//   POST https://api.vipps.no/webhooks/v1/webhooks
-//     { "url": "https://klubn.no/api/webhooks/payments/vipps",
-//       "events": ["epayment.payment.authorized.v1", "epayment.payment.captured.v1",
-//                  "epayment.payment.cancelled.v1", "epayment.payment.expired.v1",
-//                  "epayment.payment.refunded.v1", "epayment.payment.terminated.v1"] }
-//   → store the returned secret as VIPPS_WEBHOOK_SECRET (env Vipps__WebhookSecret).
+// Vipps subscription: REGISTERED 2026-06-10 via scripts/register-vipps-webhook.py
+// (id d3986ab9-63b3-4d98-8d26-bc0a543bc942) for all epayments.payment.*.v1 events —
+// note the PLURAL "epayments." domain prefix; the singular form is rejected with 400.
+// The returned secret lives in env Vipps__WebhookSecret (VIPPS_WEBHOOK_SECRET).
 //
 // Logging hygiene (vipps-v1-plan §security): reference + event type only — never
 // raw bodies, never Authorization/signature headers.
