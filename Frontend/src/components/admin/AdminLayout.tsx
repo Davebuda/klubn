@@ -16,6 +16,7 @@ const adminNav = [
   { label: 'Playlists', path: '/admin/playlists' },
   { label: 'Mixes', path: '/admin/mixes' },
   { label: 'Gallery', path: '/admin/gallery' },
+  { label: 'Highlights', path: '/admin/highlights' },
   { label: 'Users', path: '/admin/users' },
   { label: 'Newsletter', path: '/admin/newsletter' },
   { label: 'Content', path: '/admin/content' },

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { motion } from 'framer-motion';
 import { useQuery } from '@apollo/client';
 import { Link } from 'react-router-dom';
-import { GET_LANDING_DATA, HAS_PENDING_DJ_APPLICATION, GET_DJ_MIXES, GET_GENRES } from '../graphql/queries';
+import { GET_LANDING_DATA, HAS_PENDING_DJ_APPLICATION, GET_DJ_MIXES, GET_GENRES, GET_LANDING_HIGHLIGHTS } from '../graphql/queries';
 import { useAuth } from '../context/AuthContext';
 import NewsletterSignup from '../components/common/NewsletterSignup';
 import GallerySlideshow from '../components/gallery/GallerySlideshow';
@@ -14,6 +15,7 @@ import { MagneticButton } from '../components/effects/MagneticButton';
 import { EqualizerDivider, SoundWaveDivider, MarqueeStrip, BeatPulseLine, VinylSpinner, FrequencySpectrum } from '../components/effects/MusicVisuals';
 import { useCountUp } from '../hooks/useCountUp';
 import PageSeo from '../components/common/PageSeo';
+import { isRealSocialUrl } from '../utils/social';
 
 type ShowcaseItem = {
   label: string;
@@ -296,6 +298,122 @@ const CountUpStat = ({ target, label }: { target: number | string; label: string
   );
 };
 
+type HighlightMedia = {
+  id: string;
+  mediaUrl: string;
+  mediaType: string;
+  thumbnailUrl?: string | null;
+};
+
+type Highlight = {
+  id: string;
+  title: string;
+  blurb?: string | null;
+  coverImageUrl: string;
+  coverVideoUrl?: string | null;
+  highlightDate: string;
+  eventId: string;
+  eventTitle?: string | null;
+  upcomingEventId?: string | null;
+  upcomingEventTitle?: string | null;
+  media: HighlightMedia[];
+};
+
+// Highlights / Previous Moments — horizontal recap carousel of past nights.
+// Renders nothing when there are no published highlights.
+const HighlightsCarousel = () => {
+  const { data } = useQuery(GET_LANDING_HIGHLIGHTS);
+  const highlights: Highlight[] = data?.landingHighlights ?? [];
+
+  if (highlights.length === 0) return null;
+
+  return (
+    <section className="max-w-7xl mx-auto px-6 lg:px-8 pt-20 pb-10">
+      <ScrollReveal>
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
+          <div className="space-y-1">
+            <p className="text-xs font-semibold uppercase tracking-wider text-orange-500">Previous Moments</p>
+            <h2 className="text-3xl lg:text-5xl font-black tracking-tight">
+              Relive the{' '}
+              <span className="shimmer-text bg-gradient-to-r from-orange-400 to-[#FF6B35] bg-clip-text text-transparent">Nights.</span>
+            </h2>
+          </div>
+        </div>
+      </ScrollReveal>
+
+      <div className="-mx-6 px-6 lg:-mx-8 lg:px-8 overflow-x-auto scroll-smooth snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex gap-4 pb-2">
+          {highlights.map((h, i) => (
+            <motion.article
+              key={h.id}
+              initial={{ opacity: 0, y: 30 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, margin: '-60px' }}
+              transition={{ duration: 0.5, delay: i * 0.08, ease: [0.25, 0.46, 0.45, 0.94] }}
+              className="snap-start shrink-0 w-[85vw] sm:w-[28rem] lg:w-[32rem]"
+            >
+              <div className="liquid-glass group relative flex h-full flex-col rounded-3xl border border-white/[0.10] bg-gradient-to-b from-white/[0.12] to-white/[0.03] shadow-[inset_0_1px_0_rgba(255,255,255,0.15),_0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden">
+                <div className="relative aspect-[16/9] overflow-hidden bg-[#0a0a0a]">
+                  {h.coverVideoUrl ? (
+                    <video
+                      src={h.coverVideoUrl}
+                      poster={h.coverImageUrl || undefined}
+                      muted
+                      autoPlay
+                      loop
+                      playsInline
+                      className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
+                    />
+                  ) : (
+                    <img
+                      src={h.coverImageUrl}
+                      alt={h.title}
+                      loading="lazy"
+                      className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-[1.04]"
+                    />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
+                  <span className="absolute top-4 left-4 z-10 px-2.5 py-1 rounded-md bg-orange-500/20 border border-orange-500/30 text-[0.65rem] font-bold text-orange-300 uppercase tracking-wide">
+                    {new Date(h.highlightDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                </div>
+
+                <div className="flex flex-1 flex-col gap-3 p-6">
+                  <div className="space-y-1">
+                    <h3 className="text-xl font-black text-white leading-tight">{h.title}</h3>
+                    {h.eventTitle && (
+                      <p className="text-[0.7rem] uppercase tracking-wide text-gray-400">{h.eventTitle}</p>
+                    )}
+                  </div>
+                  {h.blurb && (
+                    <p className="text-sm text-gray-300/80 leading-relaxed line-clamp-3">{h.blurb}</p>
+                  )}
+                  <div className="mt-auto flex flex-wrap items-center gap-3 pt-2">
+                    <Link
+                      to={`/events/${h.eventId}`}
+                      className="inline-flex items-center gap-1.5 text-sm font-semibold text-orange-400 hover:text-orange-300 transition-colors"
+                    >
+                      Relive →
+                    </Link>
+                    {h.upcomingEventId && (
+                      <Link
+                        to={`/events/${h.upcomingEventId}`}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-4 py-1.5 text-xs font-semibold text-white/90 hover:border-orange-400/40 hover:bg-white/[0.10] transition-colors"
+                      >
+                        Next: {h.upcomingEventTitle ?? 'Upcoming'} →
+                      </Link>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </motion.article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+};
+
 const LandingPage = () => {
   const { data, loading, error } = useQuery(GET_LANDING_DATA);
   const { siteSettings } = useSiteSettings();
@@ -419,7 +537,7 @@ const LandingPage = () => {
       siteSettings.facebookUrl,
       siteSettings.youTubeUrl,
       siteSettings.twitterUrl,
-    ].filter(Boolean),
+    ].filter(isRealSocialUrl),
   };
 
   return (
@@ -668,6 +786,9 @@ const LandingPage = () => {
       {/* ─── Frequency Spectrum ─── */}
       <FrequencySpectrum theme="gradient" intensity="low" />
 
+      {/* ─── Highlights / Previous Moments ─── */}
+      <HighlightsCarousel />
+
       {/* ─── Featured DJs Intro ─── */}
       <section className="max-w-7xl mx-auto px-6 lg:px-8 pt-20 pb-10">
         <div className="flex flex-col lg:flex-row lg:items-start gap-8 lg:gap-16">
@@ -702,7 +823,7 @@ const LandingPage = () => {
         </div>
 
         {featuredDjs.length > 0 ? (
-          <StaggerContainer className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" staggerDelay={0.12}>
+          <StaggerContainer className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4" staggerDelay={0.12}>
             {featuredDjs.map((dj: any) => (
               <StaggerItem key={dj.id}>
               <TiltCard intensity={10}>
@@ -711,7 +832,7 @@ const LandingPage = () => {
                 className="liquid-glass group block rounded-3xl border border-white/[0.10] bg-gradient-to-b from-white/[0.12] to-white/[0.03] shadow-[inset_0_1px_0_rgba(255,255,255,0.15),_0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden hover:from-white/[0.16] hover:to-white/[0.05] hover:border-white/[0.18] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.2),_0_8px_32px_rgba(0,0,0,0.5)] transition-all duration-300"
               >
                 <div className="flex flex-col">
-                  <div className="relative overflow-hidden h-60">
+                  <div className="relative overflow-hidden h-44 sm:h-56 lg:h-60">
                     <img
                       src={dj.profilePictureUrl ?? dj.coverImageUrl ?? defaultDjImage}
                       alt={dj.stageName ?? dj.name}
@@ -753,7 +874,7 @@ const LandingPage = () => {
             ))}
           </StaggerContainer>
         ) : (
-          <StaggerContainer className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" staggerDelay={0.12}>
+          <StaggerContainer className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4" staggerDelay={0.12}>
             {[
               { name: 'DJ Phantom', genre: 'Afrobeats', bio: 'Dark, driving Afrobeats sets that push the boundaries of the genre.' },
               { name: 'Luna Bass', genre: 'House', bio: 'Deep house grooves with soulful vocals and hypnotic basslines.' },
@@ -988,11 +1109,12 @@ const LandingPage = () => {
         <div className="flex flex-wrap items-center justify-center gap-4">
           {[
             { label: 'Instagram', icon: 'M7.8 2h8.4C19.4 2 22 4.6 22 7.8v8.4a5.8 5.8 0 0 1-5.8 5.8H7.8C4.6 22 2 19.4 2 16.2V7.8A5.8 5.8 0 0 1 7.8 2m-.2 2A3.6 3.6 0 0 0 4 7.6v8.8C4 18.39 5.61 20 7.6 20h8.8a3.6 3.6 0 0 0 3.6-3.6V7.6C20 5.61 18.39 4 16.4 4H7.6m9.65 1.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5M12 7a5 5 0 1 1 0 10 5 5 0 0 1 0-10m0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', url: siteSettings.instagramUrl },
+            { label: 'Facebook', icon: 'M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z', url: siteSettings.facebookUrl },
             { label: 'TikTok', icon: 'M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-2.88 2.5 2.89 2.89 0 0 1-2.89-2.89 2.89 2.89 0 0 1 2.89-2.89c.28 0 .54.04.79.1v-3.5a6.37 6.37 0 0 0-.79-.05A6.34 6.34 0 0 0 3.15 15a6.34 6.34 0 0 0 6.34 6.34 6.34 6.34 0 0 0 6.34-6.34V8.87a8.16 8.16 0 0 0 4.76 1.52v-3.4a4.85 4.85 0 0 1-1-.3z', url: siteSettings.tikTokUrl },
             { label: 'YouTube', icon: 'M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.38.55A3.02 3.02 0 0 0 .5 6.19 31.6 31.6 0 0 0 0 12a31.6 31.6 0 0 0 .5 5.81 3.02 3.02 0 0 0 2.12 2.14c1.88.55 9.38.55 9.38.55s7.5 0 9.38-.55a3.02 3.02 0 0 0 2.12-2.14A31.6 31.6 0 0 0 24 12a31.6 31.6 0 0 0-.5-5.81zM9.75 15.02V8.98L15.5 12l-5.75 3.02z', url: siteSettings.youTubeUrl },
             { label: 'Twitter', icon: 'M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z', url: siteSettings.twitterUrl },
             { label: 'SoundCloud', icon: 'M1.175 12.225c-.051 0-.094.046-.101.1l-.233 2.154.233 2.105c.007.058.05.098.101.098.05 0 .09-.04.099-.098l.255-2.105-.27-2.154c-.009-.06-.05-.1-.1-.1m1.2-.8c-.064 0-.11.05-.119.114l-.209 2.953.209 2.88c.009.06.055.108.12.108.063 0 .11-.048.12-.108l.236-2.88-.236-2.954c-.011-.063-.058-.113-.12-.113m1.223-.27c-.074 0-.127.058-.135.127l-.186 3.223.186 3.1c.008.07.06.124.135.124.073 0 .126-.054.134-.124l.21-3.1-.21-3.223c-.009-.069-.061-.127-.134-.127m1.273.156c-.088 0-.145.066-.152.143l-.163 2.893.163 3.05c.007.078.064.14.152.14.086 0 .144-.063.152-.14l.184-3.05-.184-2.893c-.008-.077-.066-.143-.152-.143m1.248-.55c-.099 0-.165.076-.172.16l-.14 3.287.14 3.024c.007.087.073.157.172.157.097 0 .163-.07.171-.157l.16-3.024-.16-3.286c-.008-.085-.074-.161-.171-.161m1.3.228c-.11 0-.182.085-.19.177l-.117 3.06.117 2.997c.008.095.08.172.19.172.108 0 .18-.077.189-.172l.132-2.997-.132-3.06c-.009-.092-.08-.177-.189-.177m1.318-.34c-.127 0-.2.095-.208.196l-.093 3.168.093 2.97c.007.105.08.19.208.19.12 0 .198-.085.207-.19l.107-2.97-.107-3.168c-.009-.1-.087-.196-.207-.196m3.488-1.14c-.16 0-.27.12-.28.254l-.05 4.03.05 2.878c.008.13.12.234.28.234.155 0 .27-.104.278-.234l.057-2.878-.057-4.03c-.008-.134-.123-.254-.278-.254m1.295.108c-.165 0-.283.127-.29.267l-.035 3.909.035 2.86c.007.14.125.25.29.25.163 0 .28-.11.29-.25l.04-2.86-.04-3.91c-.01-.14-.127-.266-.29-.266m-2.607-.024c-.14 0-.244.11-.253.233l-.065 3.942.065 2.904c.008.12.112.22.253.22.138 0 .24-.1.25-.22l.074-2.904-.074-3.942c-.01-.123-.112-.233-.25-.233m3.953-.544c-.178 0-.305.135-.312.29l-.02 4.435.02 2.832c.007.152.134.276.312.276.174 0 .303-.124.31-.276l.023-2.832-.023-4.435c-.007-.155-.136-.29-.31-.29m1.322.14c-.19 0-.32.142-.328.303v.013l-.006 4.3.012 2.807c.008.16.139.287.322.287.18 0 .312-.127.322-.287l.014-2.82-.014-4.287c-.01-.16-.142-.316-.322-.316m1.3.463c-.2 0-.338.153-.344.323l-.01 3.824.01 2.8c.006.168.145.3.345.3a.33.33 0 0 0 .34-.3l.012-2.8-.013-3.824a.336.336 0 0 0-.34-.323m1.2.4a3.63 3.63 0 0 0-1.667.398 3.65 3.65 0 0 0-1.95 3.237v.015l-.003 2.588c0 .185.15.335.337.335h6.6c.46 0 .832-.374.832-.835v-2.03a3.67 3.67 0 0 0-3.67-3.67l-.48-.04z', url: siteSettings.soundCloudUrl },
-          ].filter(s => s.url).map((social) => (
+          ].filter((s) => isRealSocialUrl(s.url)).map((social) => (
             <a
               key={social.label}
               href={social.url!}

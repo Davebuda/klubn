@@ -211,6 +211,57 @@ namespace Infrastructure.Migrations
                     b.ToTable("DJApplications");
                 });
 
+            modelBuilder.Entity("DJDiP.Domain.Models.DJMix", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("DJProfileId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Duration")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Genre")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MixType")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MixUrl")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourcePlatform")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourcePostId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ThumbnailUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DJProfileId");
+
+                    b.ToTable("DJMixes");
+                });
+
             modelBuilder.Entity("DJDiP.Domain.Models.DJProfile", b =>
                 {
                     b.Property<Guid>("Id")
@@ -276,8 +327,7 @@ namespace Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("UserId")
-                        .IsUnique();
+                    b.HasIndex("UserId");
 
                     b.ToTable("DJProfiles");
                 });
@@ -353,10 +403,32 @@ namespace Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EventKey")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ImageUrl")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("OrganizerId")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("Price")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourcePlatform")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourcePostId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StatusReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TicketingUrl")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Title")
@@ -393,6 +465,101 @@ namespace Infrastructure.Migrations
                     b.ToTable("EventDJ");
                 });
 
+            modelBuilder.Entity("DJDiP.Domain.Models.EventHighlight", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Blurb")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CoverImageUrl")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CoverVideoUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("HighlightDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsPublished")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("UpcomingEventId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventId");
+
+                    b.HasIndex("UpcomingEventId");
+
+                    b.HasIndex("IsPublished", "SortOrder");
+
+                    b.ToTable("EventHighlights");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.EventOrganizerApplication", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OrganizationName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReviewedByAdminId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SocialLinks")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("SubmittedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Website")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("EventOrganizerApplications");
+                });
+
             modelBuilder.Entity("DJDiP.Domain.Models.GalleryMedia", b =>
                 {
                     b.Property<Guid>("Id")
@@ -422,6 +589,12 @@ namespace Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SourcePlatform")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourcePostId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Tags")
                         .HasColumnType("TEXT");
 
@@ -444,6 +617,10 @@ namespace Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("EventId");
+
+                    b.HasIndex("SourcePostId")
+                        .IsUnique()
+                        .HasFilter("\"SourcePostId\" IS NOT NULL");
 
                     b.HasIndex("UserId");
 
@@ -636,7 +813,17 @@ namespace Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CustomerEmail")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("HoldExpiresAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("OrderDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reference")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Status")
@@ -650,6 +837,10 @@ namespace Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Reference")
+                        .IsUnique()
+                        .HasFilter("\"Reference\" <> ''");
 
                     b.HasIndex("UserId");
 
@@ -665,13 +856,22 @@ namespace Infrastructure.Migrations
                     b.Property<Guid>("EventId")
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("LineTotalMinor")
+                        .HasColumnType("INTEGER");
+
                     b.Property<Guid>("OrderId")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Quantity")
                         .HasColumnType("INTEGER");
 
-                    b.Property<decimal>("UnitPrice")
+                    b.Property<Guid>("TicketTypeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UnitPriceMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("UnitVatRate")
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -679,6 +879,8 @@ namespace Infrastructure.Migrations
                     b.HasIndex("EventId");
 
                     b.HasIndex("OrderId");
+
+                    b.HasIndex("TicketTypeId");
 
                     b.ToTable("OrderItems");
                 });
@@ -692,8 +894,20 @@ namespace Infrastructure.Migrations
                     b.Property<decimal>("Amount")
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("AuthorizedAmountMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("CapturedAmountMinor")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Currency")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdempotencyKey")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastSyncedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<Guid>("OrderId")
@@ -709,6 +923,20 @@ namespace Infrastructure.Migrations
                     b.Property<Guid?>("PromotionCodeId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderPspReference")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderReference")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("RefundedAmountMinor")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 
@@ -722,7 +950,102 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("PromotionCodeId");
 
+                    b.HasIndex("ProviderReference")
+                        .IsUnique()
+                        .HasFilter("\"ProviderReference\" <> ''");
+
                     b.ToTable("Payments");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.PaymentWebhookEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EventType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderPspReference")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Provider", "ProviderPspReference", "EventType")
+                        .IsUnique();
+
+                    b.ToTable("PaymentWebhookEvents");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.Playlist", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CoverImageUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Curator")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("DJProfileId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Genre")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlaylistUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DJProfileId");
+
+                    b.ToTable("Playlists");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.PlaylistSong", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("PlaylistId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("SongId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PlaylistId");
+
+                    b.HasIndex("SongId");
+
+                    b.ToTable("PlaylistSongs");
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.PriceRule", b =>
@@ -984,6 +1307,18 @@ namespace Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("BrandHeadline")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BrandNarrative")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ConceptHeading")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ContactAddress")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1001,6 +1336,10 @@ namespace Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CultureHeading")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("DefaultDjImageUrl")
@@ -1030,6 +1369,14 @@ namespace Infrastructure.Migrations
                     b.Property<bool>("EnableSubscriptions")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("EventsHeading")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EventsTagline")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("FacebookUrl")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1039,6 +1386,10 @@ namespace Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("FooterText")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("GalleryVideoUrl")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
@@ -1058,8 +1409,16 @@ namespace Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<decimal>("HeroOverlayOpacity")
+                    b.Property<string>("HeroGenres")
+                        .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("HeroLocation")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("HeroOverlayOpacity")
+                        .HasColumnType("REAL");
 
                     b.Property<string>("HeroSubtitle")
                         .IsRequired()
@@ -1069,7 +1428,15 @@ namespace Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("HeroVibes")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("InstagramUrl")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LineupHeading")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
@@ -1203,6 +1570,12 @@ namespace Infrastructure.Migrations
                     b.Property<string>("Genre")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SoundCloudUrl")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SpotifyUrl")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1259,6 +1632,12 @@ namespace Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("AdmitCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AdmitsRemaining")
+                        .HasColumnType("INTEGER");
+
                     b.Property<decimal>("BasePrice")
                         .HasColumnType("TEXT");
 
@@ -1286,11 +1665,17 @@ namespace Infrastructure.Migrations
                     b.Property<bool>("IsValid")
                         .HasColumnType("INTEGER");
 
+                    b.Property<Guid?>("OrderItemId")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("PurchaseDate")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("QRCode")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RedeemedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RefundTransactionId")
@@ -1310,6 +1695,9 @@ namespace Infrastructure.Migrations
 
                     b.Property<string>("TicketNumber")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TicketTypeId")
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("TotalPrice")
@@ -1335,12 +1723,115 @@ namespace Infrastructure.Migrations
 
                     b.HasIndex("EventId");
 
+                    b.HasIndex("OrderItemId");
+
                     b.HasIndex("QRCode")
                         .IsUnique();
+
+                    b.HasIndex("TicketTypeId");
 
                     b.HasIndex("UserId");
 
                     b.ToTable("Tickets");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.TicketHold", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("TicketTypeId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId");
+
+                    b.HasIndex("TicketTypeId");
+
+                    b.ToTable("TicketHolds");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.TicketType", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AdmitCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Capacity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MaxPerOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("MinPerOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("PriceMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("QuantityHeld")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("QuantitySold")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("SalesEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SalesStart")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("VATRate")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventId");
+
+                    b.ToTable("TicketTypes", t =>
+                        {
+                            t.HasCheckConstraint("CK_TicketType_Capacity", "\"QuantitySold\" + \"QuantityHeld\" <= \"Capacity\"");
+                        });
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.UserBadge", b =>
@@ -1454,6 +1945,9 @@ namespace Infrastructure.Migrations
                     b.Property<string>("ImageUrl")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ImageUrls")
+                        .HasColumnType("TEXT");
+
                     b.Property<double?>("Latitude")
                         .HasColumnType("REAL");
 
@@ -1509,11 +2003,20 @@ namespace Infrastructure.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("DJDiP.Domain.Models.DJMix", b =>
+                {
+                    b.HasOne("DJDiP.Domain.Models.DJProfile", "DJProfile")
+                        .WithMany()
+                        .HasForeignKey("DJProfileId");
+
+                    b.Navigation("DJProfile");
+                });
+
             modelBuilder.Entity("DJDiP.Domain.Models.DJProfile", b =>
                 {
                     b.HasOne("DJDiP.Domain.Models.ApplicationUser", "User")
-                        .WithOne("DJProfile")
-                        .HasForeignKey("DJDiP.Domain.Models.DJProfile", "UserId")
+                        .WithMany("DJProfiles")
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
@@ -1590,6 +2093,35 @@ namespace Infrastructure.Migrations
                     b.Navigation("DJ");
 
                     b.Navigation("Event");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.EventHighlight", b =>
+                {
+                    b.HasOne("DJDiP.Domain.Models.Event", "Event")
+                        .WithMany()
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("DJDiP.Domain.Models.Event", "UpcomingEvent")
+                        .WithMany()
+                        .HasForeignKey("UpcomingEventId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Event");
+
+                    b.Navigation("UpcomingEvent");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.EventOrganizerApplication", b =>
+                {
+                    b.HasOne("DJDiP.Domain.Models.ApplicationUser", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.GalleryMedia", b =>
@@ -1716,9 +2248,17 @@ namespace Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("DJDiP.Domain.Models.TicketType", "TicketType")
+                        .WithMany()
+                        .HasForeignKey("TicketTypeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.Navigation("Event");
 
                     b.Navigation("Order");
+
+                    b.Navigation("TicketType");
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Payment", b =>
@@ -1736,6 +2276,34 @@ namespace Infrastructure.Migrations
                     b.Navigation("Order");
 
                     b.Navigation("PromotionCode");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.Playlist", b =>
+                {
+                    b.HasOne("DJDiP.Domain.Models.DJProfile", "DJProfile")
+                        .WithMany()
+                        .HasForeignKey("DJProfileId");
+
+                    b.Navigation("DJProfile");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.PlaylistSong", b =>
+                {
+                    b.HasOne("DJDiP.Domain.Models.Playlist", "Playlist")
+                        .WithMany("PlaylistSongs")
+                        .HasForeignKey("PlaylistId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("DJDiP.Domain.Models.Song", "Song")
+                        .WithMany()
+                        .HasForeignKey("SongId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Playlist");
+
+                    b.Navigation("Song");
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.PriceRule", b =>
@@ -1847,6 +2415,16 @@ namespace Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("DJDiP.Domain.Models.OrderItem", "OrderItem")
+                        .WithMany()
+                        .HasForeignKey("OrderItemId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("DJDiP.Domain.Models.TicketType", "TicketType")
+                        .WithMany()
+                        .HasForeignKey("TicketTypeId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("DJDiP.Domain.Models.ApplicationUser", "User")
                         .WithMany("Tickets")
                         .HasForeignKey("UserId")
@@ -1855,7 +2433,41 @@ namespace Infrastructure.Migrations
 
                     b.Navigation("Event");
 
+                    b.Navigation("OrderItem");
+
+                    b.Navigation("TicketType");
+
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.TicketHold", b =>
+                {
+                    b.HasOne("DJDiP.Domain.Models.Order", "Order")
+                        .WithMany("Holds")
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("DJDiP.Domain.Models.TicketType", "TicketType")
+                        .WithMany()
+                        .HasForeignKey("TicketTypeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Order");
+
+                    b.Navigation("TicketType");
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.TicketType", b =>
+                {
+                    b.HasOne("DJDiP.Domain.Models.Event", "Event")
+                        .WithMany("TicketTypes")
+                        .HasForeignKey("EventId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Event");
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.UserBadge", b =>
@@ -1928,7 +2540,7 @@ namespace Infrastructure.Migrations
 
                     b.Navigation("ContactMessages");
 
-                    b.Navigation("DJProfile");
+                    b.Navigation("DJProfiles");
 
                     b.Navigation("FollowedDJs");
 
@@ -1985,6 +2597,8 @@ namespace Infrastructure.Migrations
 
                     b.Navigation("OrderItems");
 
+                    b.Navigation("TicketTypes");
+
                     b.Navigation("Tickets");
                 });
 
@@ -1997,10 +2611,17 @@ namespace Infrastructure.Migrations
 
             modelBuilder.Entity("DJDiP.Domain.Models.Order", b =>
                 {
+                    b.Navigation("Holds");
+
                     b.Navigation("OrderItems");
 
                     b.Navigation("Payment")
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("DJDiP.Domain.Models.Playlist", b =>
+                {
+                    b.Navigation("PlaylistSongs");
                 });
 
             modelBuilder.Entity("DJDiP.Domain.Models.Service", b =>

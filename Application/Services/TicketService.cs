@@ -1,3 +1,4 @@
+using DJDiP.Application.DTO.PaymentDTO;
 using DJDiP.Application.DTO.TicketDTO;
 using DJDiP.Application.Interfaces;
 using DJDiP.Domain.Models;
@@ -9,16 +10,19 @@ namespace DJDiP.Application.Services
     {
         private readonly IUnitOfWork _unitOfWork;
         private readonly IEmailService _emailService;
+        private readonly IPaymentProvider _paymentProvider;
         private readonly ILogger<TicketService> _logger;
         private const decimal NORWEGIAN_EVENT_VAT_RATE = 0.12m; // 12% VAT for event tickets in Norway
 
         public TicketService(
             IUnitOfWork unitOfWork,
             IEmailService emailService,
+            IPaymentProvider paymentProvider,
             ILogger<TicketService> logger)
         {
             _unitOfWork = unitOfWork;
             _emailService = emailService;
+            _paymentProvider = paymentProvider;
             _logger = logger;
         }
 
@@ -171,7 +175,57 @@ namespace DJDiP.Application.Services
                 return null;
             }
 
-            var transactionId = Guid.NewGuid().ToString("N");
+            // P9: REAL money movement through the provider seam (replaces the old fake
+            // Guid transaction id). Tickets sold through the checkout slice carry
+            // OrderItemId -> Order -> Payment; legacy/free tickets have no captured
+            // payment, so nothing is owed at a PSP and a local marker id is recorded.
+            string transactionId;
+            Payment? payment = null;
+            if (ticket.OrderItemId.HasValue)
+            {
+                var orderItem = await _unitOfWork.OrderItems.GetByIdAsync(ticket.OrderItemId.Value);
+                if (orderItem != null)
+                    payment = await _unitOfWork.Payments.GetByOrderIdAsync(orderItem.OrderId);
+            }
+
+            if (payment is not null
+                && !string.IsNullOrEmpty(payment.ProviderReference)
+                && payment.CapturedAmountMinor > 0)
+            {
+                // Refunds MUST run through the provider that captured the money — a
+                // Vipps reference means nothing to Sandbox/Stripe and vice versa.
+                if (!string.Equals(payment.Provider, _paymentProvider.Name, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"This order was paid via {payment.Provider}, but the active provider is " +
+                        $"{_paymentProvider.Name}. Switch providers to process this refund.");
+
+                var amountMinor = (long)Math.Round(ticket.TotalPrice * 100m, MidpointRounding.AwayFromZero);
+                // Deterministic per-ticket Idempotency-Key: a retried call can never double-refund.
+                var idemKey = $"{payment.ProviderReference}-refund-{ticket.Id:N}";
+
+                var refund = await _paymentProvider.RefundAsync(
+                    payment.ProviderReference,
+                    new Money(amountMinor, string.IsNullOrEmpty(payment.Currency) ? "NOK" : payment.Currency),
+                    idemKey,
+                    default);
+
+                transactionId = refund.RefundRef;
+                payment.RefundedAmountMinor += refund.RefundedAmount.AmountMinor;
+                payment.Status = payment.RefundedAmountMinor >= payment.CapturedAmountMinor
+                    ? PaymentStatus.Refunded
+                    : PaymentStatus.PartiallyRefunded;
+                payment.LastSyncedAt = DateTime.UtcNow;
+                await _unitOfWork.Payments.UpdateAsync(payment);
+
+                _logger.LogInformation(
+                    "Refunded {AmountMinor} minor on {Reference} for ticket {TicketNumber} (refund ref {RefundRef}).",
+                    amountMinor, payment.ProviderReference, ticket.TicketNumber, refund.RefundRef);
+            }
+            else
+            {
+                // No PSP capture behind this ticket — record a clearly-local marker.
+                transactionId = "manual-" + Guid.NewGuid().ToString("N");
+            }
 
             ticket.Status = TicketStatus.Refunded;
             ticket.RefundedDate = DateTime.UtcNow;
@@ -297,6 +351,8 @@ namespace DJDiP.Application.Services
                 UserId = ticket.UserId,
                 TicketNumber = ticket.TicketNumber,
                 QRCode = ticket.QRCode,
+                AdmitCount = ticket.AdmitCount,
+                AdmitsRemaining = ticket.AdmitsRemaining,
                 BasePrice = ticket.BasePrice,
                 VATRate = ticket.VATRate,
                 VATAmount = ticket.VATAmount,

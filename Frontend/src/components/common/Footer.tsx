@@ -1,4 +1,5 @@
 import { useSiteSettings } from '../../context/SiteSettingsContext';
+import { isRealSocialUrl } from '../../utils/social';
 
 const Footer = () => {
   const { siteSettings } = useSiteSettings();
@@ -9,11 +10,12 @@ const Footer = () => {
 
   const socialLinks = [
     { label: 'Instagram', url: siteSettings.instagramUrl },
+    { label: 'Facebook', url: siteSettings.facebookUrl },
     { label: 'Twitter', url: siteSettings.twitterUrl },
     { label: 'YouTube', url: siteSettings.youTubeUrl },
     { label: 'TikTok', url: siteSettings.tikTokUrl },
     { label: 'SoundCloud', url: siteSettings.soundCloudUrl },
-  ].filter((item) => Boolean(item.url));
+  ].filter((item) => isRealSocialUrl(item.url));
 
   return (
     <footer className="relative z-10 mt-24 w-full max-w-full border-t border-white/10 bg-gradient-to-b from-white/[0.03] to-transparent py-14 text-sm text-gray-400">
@@ -37,6 +39,12 @@ const Footer = () => {
             </a>
             <a href="/contact" className="hover:text-white transition">
               Contact
+            </a>
+            <a href="/terms" className="hover:text-white transition">
+              Terms of Sale
+            </a>
+            <a href="/privacy" className="hover:text-white transition">
+              Privacy
             </a>
           </div>
         </div>
@@ -74,9 +82,15 @@ const Footer = () => {
         </div>
       </div>
 
-      <div className="mt-10 border-t border-white/5 pt-6 text-center text-xs tracking-[0.4em] text-gray-500">
-        {siteSettings.copyrightText ||
-          `© ${new Date().getFullYear()} ${siteSettings.siteName}. Crafted for the culture.`}
+      <div className="mt-10 border-t border-white/5 pt-6 text-center text-xs text-gray-500 space-y-3">
+        <p className="text-gray-500">
+          DJ DIP AV BUKENYA · Org. nr 933 809 048 · St. Edmunds Vei 39D, 0280 Oslo, Norway ·{' '}
+          <a href="mailto:tickets@klubn.no" className="hover:text-white transition">tickets@klubn.no</a> · +47 967 36 112
+        </p>
+        <p className="tracking-[0.4em]">
+          {siteSettings.copyrightText ||
+            `© ${new Date().getFullYear()} ${siteSettings.siteName}. Crafted for the culture.`}
+        </p>
       </div>
     </footer>
   );

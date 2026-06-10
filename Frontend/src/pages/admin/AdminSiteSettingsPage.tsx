@@ -242,22 +242,28 @@ const AdminSiteSettingsPage = () => {
               />
             </label>
           </div>
+          <p className="text-xs text-gray-400">
+            Social links control which icons appear on the public site. An icon shows{' '}
+            <span className="text-gray-200">only</span> when it has a real profile link — leave a
+            field blank to hide that icon until you add one.
+          </p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {(
               [
-                'facebookUrl',
-                'instagramUrl',
-                'twitterUrl',
-                'youTubeUrl',
-                'tikTokUrl',
-                'soundCloudUrl',
+                { field: 'facebookUrl', label: 'Facebook', placeholder: 'https://facebook.com/yourpage' },
+                { field: 'instagramUrl', label: 'Instagram', placeholder: 'https://instagram.com/yourhandle' },
+                { field: 'twitterUrl', label: 'Twitter / X', placeholder: 'https://x.com/yourhandle' },
+                { field: 'youTubeUrl', label: 'YouTube', placeholder: 'https://youtube.com/@yourchannel' },
+                { field: 'tikTokUrl', label: 'TikTok', placeholder: 'https://tiktok.com/@yourhandle' },
+                { field: 'soundCloudUrl', label: 'SoundCloud', placeholder: 'https://soundcloud.com/yourname' },
               ] as const
-            ).map((field) => (
+            ).map(({ field, label, placeholder }) => (
               <label key={field} className="space-y-1 text-sm font-semibold text-gray-300">
-                {field.replace('Url', '').replace(/([A-Z])/g, ' $1')}
+                {label}
                 <input
                   type="url"
                   className={inputClass}
+                  placeholder={placeholder}
                   value={form[field]}
                   onChange={(e) => handleChange(field, e.target.value)}
                 />

@@ -14,6 +14,9 @@ namespace DJDiP.Domain.Models
         public List<Genre> Genres { get; set; } = new();
         public List<Ticket> Tickets { get; set; } = new();
         public List<OrderItem> OrderItems  { get; set;} = new();
+        // Per-tier ticket templates (VIP/GA/Table-for-4...). Event.Price becomes a
+        // "from NOK X" display hint once tiers exist. (ticketing-vipps §2, L1)
+        public List<TicketType> TicketTypes { get; set; } = new();
         public string? ImageUrl { get; set; }
         public string? VideoUrl { get; set; }
         public string? TicketingUrl { get; set; }
@@ -26,5 +29,9 @@ namespace DJDiP.Domain.Models
         // n8n ingest provenance (used for idempotency)
         public string? SourcePostId { get; set; }
         public string? SourcePlatform { get; set; }
+
+        // Content-based idempotency key: lowercase, trimmed, diacritics-folded
+        // "${date:yyyy-MM-dd}|${venueName}". Empty when date or venue is missing.
+        public string? EventKey { get; set; }
     }
 }

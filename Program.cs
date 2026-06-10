@@ -8,11 +8,13 @@ using DJDiP.Application.DTO.VenueDTO;
 using DJDiP.Application.DTO.ContactMessageDTO;
 using DJDiP.Application.DTO.DJTop10DTO;
 using DJDiP.Application.DTO.TicketDTO;
+using DJDiP.Application.DTO.TicketTypeDTO;
 using DJDiP.Application.DTO.SongDTO;
 using DJDiP.Application.DTO.SiteSettingsDTO;
 using DJDiP.Application.DTO.PlaylistDTO;
 using DJDiP.Application.DTO.MixDTO;
 using DJDiP.Application.DTO.GalleryDTO;
+using DJDiP.Application.DTO.HighlightDTO;
 using DJDiP.Application.DTO.UserDTO;
 using DJDiP.Application.DTO.Auth;
 using DJDiP.Application.Interfaces;
@@ -167,9 +169,79 @@ builder.Services.AddScoped<ISongService, SongService>();
 builder.Services.AddScoped<IDJApplicationService, DJApplicationService>();
 builder.Services.AddScoped<ISiteSettingsService, SiteSettingsService>();
 builder.Services.AddScoped<IGalleryMediaService, GalleryMediaService>();
+builder.Services.AddScoped<IEventHighlightService, EventHighlightService>();
 builder.Services.AddScoped<IPlaylistService, PlaylistService>();
 builder.Services.AddScoped<IDJMixService, DJMixService>();
 builder.Services.AddHttpClient();
+
+// ========== PAYMENT SEAM (provider-agnostic) ==========
+// Bind config: Vipps (plumbing only, real values arrive with P4 TEST creds), Sandbox
+// (the no-creds E2E provider), Ticketing (orchestration knobs), Qr (token signing).
+builder.Services.Configure<DJDiP.Infrastructure.Payments.Vipps.VippsOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Vipps.VippsOptions.SectionName));
+builder.Services.Configure<DJDiP.Infrastructure.Payments.Sandbox.SandboxOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Sandbox.SandboxOptions.SectionName));
+builder.Services.Configure<DJDiP.Infrastructure.Payments.Stripe.StripeOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.Stripe.StripeOptions.SectionName));
+builder.Services.Configure<DJDiP.Infrastructure.Payments.TicketingOptions>(
+    builder.Configuration.GetSection(DJDiP.Infrastructure.Payments.TicketingOptions.SectionName));
+builder.Services.Configure<DJDiP.Application.Services.QrOptions>(
+    builder.Configuration.GetSection(DJDiP.Application.Services.QrOptions.SectionName));
+
+// QR door-scan token signing (pure HMAC, provider-agnostic).
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IQrTokenService,
+    DJDiP.Application.Services.QrTokenService>();
+
+// Active payment provider, selected by config "Payments:Provider" = Vipps | Stripe |
+// Sandbox. Sandbox runs the full checkout->capture->issue->QR flow with NO PSP creds;
+// Vipps (P4) and Stripe are the same seam with a real PSP behind them. The orchestrator
+// and domain are identical under all three (design §3, L2).
+//
+// When unset the default is Sandbox — going live with a real PSP must always be an
+// explicit config decision, never inferred from which credentials happen to be present.
+var activeProvider = builder.Configuration["Payments:Provider"] ?? "Sandbox";
+
+if (activeProvider.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
+{
+    // Fail fast on missing credentials — a half-configured Vipps provider must never
+    // reach a buyer. (Values come from env: Vipps__ClientId etc.; see .env.example.)
+    string[] requiredVippsKeys = ["Vipps:ClientId", "Vipps:ClientSecret", "Vipps:SubscriptionKey", "Vipps:Msn"];
+    var missing = requiredVippsKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
+    if (missing.Count > 0)
+        throw new InvalidOperationException(
+            $"Payments:Provider=Vipps but required config is missing: {string.Join(", ", missing)}. " +
+            "Set the Vipps__* environment variables (see .env.example).");
+
+    // Token is merchant-scoped — one cache for the whole process.
+    builder.Services.AddSingleton<DJDiP.Infrastructure.Payments.Vipps.VippsAccessTokenCache>();
+    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+        DJDiP.Infrastructure.Payments.Vipps.VippsPaymentProvider>();
+}
+else if (activeProvider.Equals("Stripe", StringComparison.OrdinalIgnoreCase))
+{
+    // Same fail-fast posture as Vipps: a half-configured Stripe provider must never
+    // reach a buyer. (Values come from env: Stripe__SecretKey etc.; see .env.example.)
+    string[] requiredStripeKeys = ["Stripe:SecretKey", "Stripe:WebhookSecret"];
+    var missing = requiredStripeKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
+    if (missing.Count > 0)
+        throw new InvalidOperationException(
+            $"Payments:Provider=Stripe but required config is missing: {string.Join(", ", missing)}. " +
+            "Set the Stripe__* environment variables (see .env.example).");
+
+    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+        DJDiP.Infrastructure.Payments.Stripe.StripePaymentProvider>();
+}
+else
+    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+        DJDiP.Infrastructure.Payments.Sandbox.SandboxPaymentProvider>();
+
+// Real orchestration lives in Infrastructure (EF access) — NOT Application.
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentOrchestrator,
+    DJDiP.Infrastructure.Payments.PaymentOrchestrator>();
+
+// Releases expired inventory holds from abandoned checkouts (architecture §2).
+// Only sweeps payments still in Created state — never races an in-flight capture.
+builder.Services.AddHostedService<DJDiP.Infrastructure.Payments.TicketHoldSweeper>();
 builder.Services.AddScoped<IFileUploadService>(sp =>
 {
     var env = sp.GetRequiredService<IWebHostEnvironment>();
@@ -332,6 +404,56 @@ finally
 
 public class Query
 {
+    // ===== Ticketing — provider-agnostic checkout reads (design §6) =====
+
+    // Live ticket tiers for an event (drafts hidden). Available is computed, never stored.
+    public async Task<IReadOnlyList<DJDiP.Application.DTO.PaymentDTO.TicketTypeAvailabilityDto>> TicketTypes(
+        Guid eventId,
+        [Service] AppDbContext db)
+    {
+        var types = await db.TicketTypes
+            .Where(t => t.EventId == eventId && t.Status != TicketTypeStatus.Draft)
+            .OrderBy(t => t.SortOrder)
+            .ToListAsync();
+
+        return types.Select(t => new DJDiP.Application.DTO.PaymentDTO.TicketTypeAvailabilityDto
+        {
+            Id = t.Id,
+            Name = t.Name,
+            Description = t.Description,
+            PriceMinor = t.PriceMinor,
+            VatRate = t.VATRate,
+            Currency = t.Currency,
+            AdmitCount = t.AdmitCount,
+            MinPerOrder = t.MinPerOrder,
+            MaxPerOrder = t.MaxPerOrder,
+            Available = Math.Max(0, t.Capacity - t.QuantitySold - t.QuantityHeld),
+            Status = t.Status.ToString(),
+            SortOrder = t.SortOrder
+        }).ToList();
+    }
+
+    // Order/payment status by merchant reference (checkout-return polling).
+    public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto?> TicketOrder(
+        string reference,
+        [Service] AppDbContext db)
+    {
+        var payment = await db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == reference);
+        if (payment is null) return null;
+
+        var order = await db.Orders.FirstOrDefaultAsync(o => o.Id == payment.OrderId);
+        var totalMinor = payment.CapturedAmountMinor > 0
+            ? payment.CapturedAmountMinor
+            : (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+
+        return new DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto(
+            reference,
+            order?.Status.ToString() ?? "Unknown",
+            payment.Status.ToString(),
+            totalMinor,
+            payment.Currency);
+    }
+
     // Landing page: upcoming events and featured DJs
     public async Task<LandingPageData> Landing(
         [Service] IEventService events,
@@ -562,6 +684,26 @@ public class Query
         return await galleryMediaService.GetByUserAsync(userId);
     }
 
+    // Highlights / Previous Moments — published editorial recaps for the landing carousel.
+    public async Task<IEnumerable<EventHighlightDto>> LandingHighlights(
+        [Service] IEventHighlightService highlightService,
+        int limit = 6)
+    {
+        return await highlightService.GetPublishedAsync(limit);
+    }
+
+    // All highlights (admin) — published + unpublished, for the curation console.
+    public async Task<IEnumerable<EventHighlightDto>> AllHighlights(
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        Mutation.RequireAdmin(httpContextAccessor);
+        var highlights = await highlightService.GetAllAsync();
+        return highlights
+            .OrderBy(h => h.SortOrder)
+            .ThenByDescending(h => h.HighlightDate);
+    }
+
     // User profile query
     public async Task<UserDetailsDto?> UserById(
         string userId,
@@ -570,17 +712,18 @@ public class Query
         return await userService.GetUserByIdAsync(userId);
     }
 
-    // All users (admin)
+    // All users (admin). P0-T1: admin-only guard; PasswordHash never projected/exposed.
     public async Task<IEnumerable<AdminUserDto>> Users(
-        [Service] IUnitOfWork unitOfWork)
+        [Service] IUnitOfWork unitOfWork,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        Mutation.RequireAdmin(httpContextAccessor);
         var users = await unitOfWork.Users.GetAllAsync();
         return users.OrderByDescending(u => u.CreatedAt).Select(u => new AdminUserDto
         {
             Id = u.Id,
             FullName = u.FullName,
             Email = u.Email,
-            PasswordHash = u.PasswordHash,
             Role = u.Role,
             IsEmailVerified = u.IsEmailVerified,
             Provider = u.Provider,
@@ -589,6 +732,29 @@ public class Query
             UpdatedAt = u.UpdatedAt,
             LastLoginAt = u.LastLoginAt
         });
+    }
+
+    // Ticket types for an event (P1-T3). Public callers see only sellable
+    // (OnSale) tiers; Admin/CoAdmin see all tiers for management. Money is
+    // returned in minor units (øre).
+    public async Task<IEnumerable<TicketTypeDto>> TicketTypesByEvent(
+        Guid eventId,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        var role = Mutation.GetCurrentRole(httpContextAccessor);
+        var isManager = role == "Admin" || role == "CoAdmin";
+
+        var query = db.TicketTypes.AsNoTracking().Where(tt => tt.EventId == eventId);
+        if (!isManager)
+            query = query.Where(tt => tt.Status == TicketTypeStatus.OnSale);
+
+        var types = await query
+            .OrderBy(tt => tt.SortOrder)
+            .ThenBy(tt => tt.PriceMinor)
+            .ToListAsync();
+
+        return types.Select(TicketTypeMapper.ToDto);
     }
 
     // DJ Reviews
@@ -831,8 +997,251 @@ public class LandingPageData
 
 public class Mutation
 {
+    // ===== Ticketing — provider-agnostic checkout (design §6) =====
+
+    // Create an order, reserve inventory (oversell-safe), and start the payment.
+    // Server resolves all prices from TicketType — client amounts are never trusted.
+    public async Task<DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload> CreateTicketOrder(
+        DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderInput input,
+        [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
+        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
+        [Service] IHttpContextAccessor accessor)
+    {
+        var userId = RequireAuthentication(accessor);
+        var lines = (input.Lines ?? new List<DJDiP.Application.DTO.PaymentDTO.OrderLineInput>())
+            .Select(l => new DJDiP.Application.DTO.PaymentDTO.OrderLineRequest(l.TicketTypeId, l.Quantity))
+            .ToList();
+        try
+        {
+            var result = await orchestrator.CreatePaymentAsync(
+                input.EventId, lines, input.CustomerEmail, userId, default);
+            return new DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload(
+                result.Order, result.RedirectUrl, provider.Name);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new GraphQLException(ex.Message);
+        }
+    }
+
+    // DEV-ONLY end-to-end completion for the Sandbox provider: drives the exact same
+    // idempotent FinalizeAsync(Captured) path a real provider webhook would. Refuses to
+    // run under any non-Sandbox provider.
+    public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto> CompleteSandboxPayment(
+        string reference,
+        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
+        [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
+        [Service] AppDbContext db,
+        [Service] IWebHostEnvironment hostEnv,
+        [Service] IHttpContextAccessor accessor)
+    {
+        // HARD environment gate (prod-readiness): even if a production deploy is
+        // misconfigured with Payments:Provider=Sandbox, buyers must never be able
+        // to self-complete payments (= free tickets). Development-only, full stop.
+        if (!hostEnv.IsDevelopment())
+            throw new GraphQLException("Sandbox completion is only available in Development.");
+
+        if (!provider.Name.Equals("Sandbox", StringComparison.OrdinalIgnoreCase))
+            throw new GraphQLException("Sandbox completion is only available with the Sandbox provider.");
+
+        // Auth-gated: a caller may only complete their OWN order, even in sandbox.
+        var userId = RequireAuthentication(accessor);
+
+        var payment = await db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == reference);
+        if (payment is null) throw new GraphQLException("Order not found.");
+
+        var owner = await db.Orders.Where(o => o.Id == payment.OrderId).Select(o => o.UserId).FirstOrDefaultAsync();
+        if (owner != userId)
+            throw new GraphQLException("You can only complete your own order.");
+
+        var amountMinor = (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+        var ev = new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+            OrderRef: reference,
+            PspRef: "sbx-psp-" + reference,
+            Type: DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured,
+            Amount: new DJDiP.Application.DTO.PaymentDTO.Money(amountMinor, payment.Currency),
+            OccurredAt: DateTime.UtcNow,
+            RawPayload: "{\"sandbox\":true}");
+
+        await orchestrator.FinalizeAsync(ev, default);
+
+        await db.Entry(payment).ReloadAsync();
+        var order = await db.Orders.FirstOrDefaultAsync(o => o.Id == payment.OrderId);
+        return new DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto(
+            reference,
+            order?.Status.ToString() ?? "Unknown",
+            payment.Status.ToString(),
+            payment.CapturedAmountMinor > 0 ? payment.CapturedAmountMinor : amountMinor,
+            payment.Currency);
+    }
+
+    // Poll-reconcile for real providers (P4; vipps-v1-plan "reconciliation fallback").
+    // The checkout-return page calls this once + on each poll tick. It reads the
+    // provider's live status and drives the SAME idempotent FinalizeAsync path the
+    // webhook (P6) will use — so poll + webhook can never double-issue (the CAS guard
+    // in CaptureAndIssueAsync is the backstop). Auto-capture on Authorized is locked
+    // decision D1 (digital delivery).
+    public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto> ReconcileTicketOrder(
+        string reference,
+        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
+        [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor accessor)
+    {
+        // Auth-gated: a caller may only reconcile their OWN order (P0: identity from JWT).
+        var userId = RequireAuthentication(accessor);
+
+        var payment = await db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == reference);
+        if (payment is null) throw new GraphQLException("Order not found.");
+
+        var owner = await db.Orders.Where(o => o.Id == payment.OrderId).Select(o => o.UserId).FirstOrDefaultAsync();
+        if (owner != userId)
+            throw new GraphQLException("You can only reconcile your own order.");
+
+        // Fast path: already captured — tickets exist, nothing to reconcile.
+        if (payment.Status != PaymentStatus.Captured)
+        {
+            var snap = await provider.GetStatusAsync(reference, default);
+            // Amount = server-side DB truth (resolved at checkout), never the snapshot.
+            var amountMinor = (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+            var dbAmount = new DJDiP.Application.DTO.PaymentDTO.Money(amountMinor, payment.Currency);
+
+            switch (snap.State)
+            {
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Authorized:
+                    // Deterministic Idempotency-Key → a retried capture can't double-charge.
+                    var capture = await provider.CaptureAsync(reference, dbAmount, reference + "-capture", default);
+                    await orchestrator.FinalizeAsync(new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+                        reference, capture.PspRef, DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured,
+                        capture.CapturedAmount, DateTime.UtcNow, "{\"reconcile\":\"capture\"}"), default);
+                    break;
+
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured:
+                    // e.g. a capture call timed out client-side but landed at the provider.
+                    // Record DB truth (review H1): the provider snapshot is never trusted for
+                    // the persisted amount — a mismatch is logged for manual reconciliation.
+                    if (snap.CapturedAmount.AmountMinor > 0 && snap.CapturedAmount.AmountMinor != amountMinor)
+                        Serilog.Log.Warning(
+                            "Reconcile {Reference}: provider captured {ProviderMinor} != order total {DbMinor}; recording DB truth.",
+                            reference, snap.CapturedAmount.AmountMinor, amountMinor);
+                    await orchestrator.FinalizeAsync(new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+                        reference, snap.PspRef, DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured,
+                        dbAmount, DateTime.UtcNow, "{\"reconcile\":\"poll\"}"), default);
+                    break;
+
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Cancelled:
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Expired:
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Failed:
+                    await orchestrator.FinalizeAsync(new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+                        reference, snap.PspRef, snap.State,
+                        new DJDiP.Application.DTO.PaymentDTO.Money(0, payment.Currency),
+                        DateTime.UtcNow, "{\"reconcile\":\"release\"}"), default);
+                    break;
+
+                // Pending (user still in the Vipps app) / Refunded → nothing to do here.
+            }
+
+            await db.Entry(payment).ReloadAsync();
+        }
+
+        var ord = await db.Orders.FirstOrDefaultAsync(o => o.Id == payment.OrderId);
+        var totalMinor = payment.CapturedAmountMinor > 0
+            ? payment.CapturedAmountMinor
+            : (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+        return new DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto(
+            reference,
+            ord?.Status.ToString() ?? "Unknown",
+            payment.Status.ToString(),
+            totalMinor,
+            payment.Currency);
+    }
+
+    // P7 door-scan redemption (design §7) — replaces the legacy CheckInTicketAsync flow.
+    // Token is verified (constant-time HMAC + expiry) BEFORE the DB is touched; the
+    // single-use guarantee is the atomic conditional UPDATE on the Ticket row, so two
+    // scanners racing the same QR can never both admit. Group tickets ("Table-for-4"):
+    // omitting `admits` redeems everything remaining in one scan (D4 default); passing
+    // admits=N supports wave entry — the ticket stays Active while admits remain.
+    // Holder name comes from a server lookup AFTER validation, never from the QR.
+    public async Task<RedeemTicketPayload> RedeemTicket(
+        string token,
+        int? admits,
+        [Service] DJDiP.Application.Interfaces.IQrTokenService qr,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor accessor)
+    {
+        RequireCoAdmin(accessor); // door staff / scanner role
+
+        var verify = qr.Verify(token);
+        if (verify.Status is DJDiP.Application.Interfaces.QrVerifyStatus.BadFormat
+                          or DJDiP.Application.Interfaces.QrVerifyStatus.BadSignature)
+            throw new GraphQLException("Invalid ticket.");
+        if (verify.Status == DJDiP.Application.Interfaces.QrVerifyStatus.Expired)
+            throw new GraphQLException("Ticket has expired.");
+
+        var data = verify.Data!;
+        var ticket = await db.Tickets.FirstOrDefaultAsync(t => t.Id == data.TicketId);
+        if (ticket is null || ticket.EventId != data.EventId)
+            throw new GraphQLException("Invalid ticket.");
+
+        // Advisory pre-checks for a precise scanner message — the atomic UPDATE below
+        // remains the actual single-use guard under racing scanners.
+        if (ticket.Status == TicketStatus.Used || ticket.IsUsed || ticket.AdmitsRemaining <= 0)
+            throw new GraphQLException("Ticket already used.");
+
+        var admitNow = admits ?? ticket.AdmitsRemaining; // default: single scan admits all
+        if (admitNow < 1)
+            throw new GraphQLException("Admit count must be at least 1.");
+
+        var now = DateTime.UtcNow;
+
+        // Atomic single-use claim (works on SQLite dev + PostgreSQL prod; booleans and
+        // enums passed as parameters so each provider maps them natively). 0 rows
+        // affected ⇒ already used / not active / not enough admits left — never admit.
+        var claimed = await db.Database.ExecuteSqlInterpolatedAsync(
+            $@"UPDATE ""Tickets""
+               SET ""AdmitsRemaining"" = ""AdmitsRemaining"" - {admitNow},
+                   ""RedeemedAt""  = COALESCE(""RedeemedAt"", {now}),
+                   ""CheckInTime"" = COALESCE(""CheckInTime"", {now}),
+                   ""Status"" = CASE WHEN ""AdmitsRemaining"" - {admitNow} <= 0
+                                     THEN {(int)TicketStatus.Used} ELSE ""Status"" END,
+                   ""IsUsed"" = CASE WHEN ""AdmitsRemaining"" - {admitNow} <= 0
+                                     THEN {true} ELSE ""IsUsed"" END
+               WHERE ""Id"" = {ticket.Id}
+                 AND ""Status"" = {(int)TicketStatus.Active}
+                 AND ""IsValid"" = {true}
+                 AND ""AdmitsRemaining"" >= {admitNow}");
+
+        if (claimed != 1)
+        {
+            await db.Entry(ticket).ReloadAsync();
+            if (ticket.Status == TicketStatus.Used || ticket.IsUsed)
+                throw new GraphQLException("Ticket already used.");
+            if (ticket.Status != TicketStatus.Active || !ticket.IsValid)
+                throw new GraphQLException($"Ticket is not valid for entry ({ticket.Status}).");
+            throw new GraphQLException($"Only {ticket.AdmitsRemaining} admit(s) remaining on this ticket.");
+        }
+
+        await db.Entry(ticket).ReloadAsync();
+        var eventTitle = await db.Events.Where(e => e.Id == ticket.EventId)
+            .Select(e => e.Title).FirstOrDefaultAsync() ?? "Unknown event";
+        var holderName = await db.ApplicationUsers.Where(u => u.Id == ticket.UserId)
+            .Select(u => u.FullName).FirstOrDefaultAsync();
+
+        return new RedeemTicketPayload(
+            TicketNumber: ticket.TicketNumber,
+            EventTitle: eventTitle,
+            HolderName: holderName,
+            AdmittedNow: admitNow,
+            AdmitsRemaining: ticket.AdmitsRemaining,
+            RedeemedAt: ticket.RedeemedAt ?? now);
+    }
+
     // ========== AUTH HELPERS ==========
-    private static string RequireAuthentication(IHttpContextAccessor accessor)
+    // internal so the Query class (and other resolver types) can reuse the same
+    // JWT-claim-based guards. P0-T1/P0-T3: identity is always derived from the
+    // authenticated principal, never trusted from client input.
+    internal static string RequireAuthentication(IHttpContextAccessor accessor)
     {
         var userId = accessor.HttpContext?.User.FindFirst("userId")?.Value;
         if (string.IsNullOrEmpty(userId))
@@ -840,7 +1249,7 @@ public class Mutation
         return userId;
     }
 
-    private static string RequireAdmin(IHttpContextAccessor accessor)
+    internal static string RequireAdmin(IHttpContextAccessor accessor)
     {
         var userId = RequireAuthentication(accessor);
         var role = accessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
@@ -867,7 +1276,7 @@ public class Mutation
         return userId;
     }
 
-    private static string? GetCurrentRole(IHttpContextAccessor accessor)
+    internal static string? GetCurrentRole(IHttpContextAccessor accessor)
     {
         return accessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
     }
@@ -2118,6 +2527,45 @@ public class Mutation
         return await galleryMediaService.DeleteAsync(id);
     }
 
+    // HIGHLIGHTS / PREVIOUS MOMENTS MUTATIONS (admin curation)
+    public async Task<Guid> CreateEventHighlight(
+        CreateEventHighlightDto input,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.CreateAsync(input);
+    }
+
+    public async Task<bool> UpdateEventHighlight(
+        Guid id,
+        UpdateEventHighlightDto input,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.UpdateAsync(id, input);
+    }
+
+    public async Task<bool> SetHighlightPublished(
+        Guid id,
+        bool published,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.SetPublishedAsync(id, published);
+    }
+
+    public async Task<bool> DeleteEventHighlight(
+        Guid id,
+        [Service] IEventHighlightService highlightService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+        return await highlightService.DeleteAsync(id);
+    }
+
     public async Task<bool> LikeGalleryMedia(
         Guid id,
         [Service] IGalleryMediaService galleryMediaService,
@@ -2153,19 +2601,31 @@ public class Mutation
         return true;
     }
 
-    // TICKET MUTATIONS
+    // ========== TICKET MUTATIONS ==========
+    // P0-T3 IDENTITY RULE: the acting buyer's id is ALWAYS derived from the JWT
+    // principal (RequireAuthentication), never from input.UserId. input.UserId is
+    // only honoured where an admin acts on behalf of another user, and only after
+    // RequireAdmin has gated the call (see PurchaseTicket below). A forged userId in
+    // a mutation variable therefore has no effect for non-admin callers.
+    // Public, paid ticket issuance flows through the P5/P6 createTicketOrder + Vipps
+    // capture-webhook path — NOT through this mutation.
     public async Task<TicketDto> PurchaseTicket(
         PurchaseTicketInput input,
         [Service] ITicketService ticketService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAuthentication(httpContextAccessor);
+        // P0-T2: admin-only. Survives solely as an admin comp-ticket tool; the free
+        // public issuance bypass is closed. Public buyers use the paid P5/P6 path.
+        RequireAdmin(httpContextAccessor);
 
         if (string.IsNullOrWhiteSpace(input.Email))
             throw new GraphQLException("Email is required to purchase a ticket.");
         if (!input.TermsAccepted)
             throw new GraphQLException("You must accept the terms to purchase a ticket.");
+        if (string.IsNullOrWhiteSpace(input.UserId))
+            throw new GraphQLException("UserId is required: specify the user this comp ticket is issued to.");
 
+        // Admin-only path: input.UserId is the target recipient (admin acts on behalf of).
         var dto = new CreateTicketDto
         {
             EventId = input.EventId,
@@ -2252,6 +2712,110 @@ public class Mutation
     {
         RequireCoAdmin(httpContextAccessor);
         await ticketService.DeleteAsync(ticketId);
+        return true;
+    }
+
+    // ========== TICKET TYPE (TIER) MUTATIONS — admin CRUD (P1-T3) ==========
+    // Price is the source of truth for checkout; money is always minor units (øre).
+    public async Task<TicketTypeDto> CreateTicketType(
+        CreateTicketTypeInput input,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+
+        var eventExists = await db.Events.AnyAsync(e => e.Id == input.EventId);
+        if (!eventExists)
+            throw new GraphQLException("Event not found.");
+        if (string.IsNullOrWhiteSpace(input.Name))
+            throw new GraphQLException("Ticket type name is required.");
+        if (input.Capacity < 0)
+            throw new GraphQLException("Capacity cannot be negative.");
+        if (input.AdmitCount < 1)
+            throw new GraphQLException("AdmitCount must be at least 1.");
+        if (input.MinPerOrder < 1 || input.MaxPerOrder < input.MinPerOrder)
+            throw new GraphQLException("Invalid per-order limits.");
+
+        var tt = new TicketType
+        {
+            Id = Guid.NewGuid(),
+            EventId = input.EventId,
+            Name = input.Name,
+            Description = input.Description,
+            PriceMinor = input.PriceMinor,
+            VATRate = input.VATRate ?? 0.12m,
+            Currency = string.IsNullOrWhiteSpace(input.Currency) ? "NOK" : input.Currency!,
+            Capacity = input.Capacity,
+            AdmitCount = input.AdmitCount,
+            MinPerOrder = input.MinPerOrder,
+            MaxPerOrder = input.MaxPerOrder,
+            SalesStart = input.SalesStart,
+            SalesEnd = input.SalesEnd,
+            Status = input.Status ?? TicketTypeStatus.Draft,
+            SortOrder = input.SortOrder
+        };
+
+        db.TicketTypes.Add(tt);
+        await db.SaveChangesAsync();
+        return TicketTypeMapper.ToDto(tt);
+    }
+
+    public async Task<TicketTypeDto> UpdateTicketType(
+        UpdateTicketTypeInput input,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+
+        var tt = await db.TicketTypes.FirstOrDefaultAsync(x => x.Id == input.Id);
+        if (tt == null)
+            throw new GraphQLException("Ticket type not found.");
+
+        if (input.Name != null) tt.Name = input.Name;
+        if (input.Description != null) tt.Description = input.Description;
+        if (input.PriceMinor.HasValue) tt.PriceMinor = input.PriceMinor.Value;
+        if (input.VATRate.HasValue) tt.VATRate = input.VATRate.Value;
+        if (!string.IsNullOrWhiteSpace(input.Currency)) tt.Currency = input.Currency!;
+        if (input.Capacity.HasValue)
+        {
+            if (input.Capacity.Value < tt.QuantitySold + tt.QuantityHeld)
+                throw new GraphQLException("Capacity cannot be set below already sold + held quantity.");
+            tt.Capacity = input.Capacity.Value;
+        }
+        if (input.AdmitCount.HasValue)
+        {
+            if (input.AdmitCount.Value < 1)
+                throw new GraphQLException("AdmitCount must be at least 1.");
+            tt.AdmitCount = input.AdmitCount.Value;
+        }
+        if (input.MinPerOrder.HasValue) tt.MinPerOrder = input.MinPerOrder.Value;
+        if (input.MaxPerOrder.HasValue) tt.MaxPerOrder = input.MaxPerOrder.Value;
+        if (tt.MaxPerOrder < tt.MinPerOrder)
+            throw new GraphQLException("MaxPerOrder cannot be less than MinPerOrder.");
+        if (input.SalesStart.HasValue) tt.SalesStart = input.SalesStart;
+        if (input.SalesEnd.HasValue) tt.SalesEnd = input.SalesEnd;
+        if (input.Status.HasValue) tt.Status = input.Status.Value;
+        if (input.SortOrder.HasValue) tt.SortOrder = input.SortOrder.Value;
+
+        await db.SaveChangesAsync();
+        return TicketTypeMapper.ToDto(tt);
+    }
+
+    public async Task<bool> DeleteTicketType(
+        Guid id,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        RequireCoAdmin(httpContextAccessor);
+
+        var tt = await db.TicketTypes.FirstOrDefaultAsync(x => x.Id == id);
+        if (tt == null)
+            throw new GraphQLException("Ticket type not found.");
+        if (tt.QuantitySold > 0)
+            throw new GraphQLException("Cannot delete a ticket type that has sold tickets.");
+
+        db.TicketTypes.Remove(tt);
+        await db.SaveChangesAsync();
         return true;
     }
 
@@ -2528,6 +3092,79 @@ public class TransferTicketInput
     public string ToEmail { get; set; } = string.Empty;
 }
 
+// P7 door-scan redemption result — what the scanner UI shows after a valid scan.
+// HolderName is a post-validation server lookup (design §7: never read from the QR).
+public sealed record RedeemTicketPayload(
+    string TicketNumber,
+    string EventTitle,
+    string? HolderName,
+    int AdmittedNow,
+    int AdmitsRemaining,
+    DateTime RedeemedAt);
+
+// ===== Ticket type (tier) admin CRUD inputs (P1-T3) — money in minor units (øre) =====
+public class CreateTicketTypeInput
+{
+    public Guid EventId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+    public long PriceMinor { get; set; }
+    public decimal? VATRate { get; set; }
+    public string? Currency { get; set; }
+    public int Capacity { get; set; }
+    public int AdmitCount { get; set; } = 1;
+    public int MinPerOrder { get; set; } = 1;
+    public int MaxPerOrder { get; set; } = 10;
+    public DateTime? SalesStart { get; set; }
+    public DateTime? SalesEnd { get; set; }
+    public TicketTypeStatus? Status { get; set; }
+    public int SortOrder { get; set; }
+}
+
+// All fields optional: only supplied fields are patched.
+public class UpdateTicketTypeInput
+{
+    public Guid Id { get; set; }
+    public string? Name { get; set; }
+    public string? Description { get; set; }
+    public long? PriceMinor { get; set; }
+    public decimal? VATRate { get; set; }
+    public string? Currency { get; set; }
+    public int? Capacity { get; set; }
+    public int? AdmitCount { get; set; }
+    public int? MinPerOrder { get; set; }
+    public int? MaxPerOrder { get; set; }
+    public DateTime? SalesStart { get; set; }
+    public DateTime? SalesEnd { get; set; }
+    public TicketTypeStatus? Status { get; set; }
+    public int? SortOrder { get; set; }
+}
+
+internal static class TicketTypeMapper
+{
+    public static TicketTypeDto ToDto(TicketType tt) => new()
+    {
+        Id = tt.Id,
+        EventId = tt.EventId,
+        Name = tt.Name,
+        Description = tt.Description,
+        PriceMinor = tt.PriceMinor,
+        VATRate = tt.VATRate,
+        Currency = tt.Currency,
+        Capacity = tt.Capacity,
+        QuantitySold = tt.QuantitySold,
+        QuantityHeld = tt.QuantityHeld,
+        Available = tt.Capacity - tt.QuantitySold - tt.QuantityHeld,
+        AdmitCount = tt.AdmitCount,
+        MinPerOrder = tt.MinPerOrder,
+        MaxPerOrder = tt.MaxPerOrder,
+        SalesStart = tt.SalesStart,
+        SalesEnd = tt.SalesEnd,
+        Status = tt.Status.ToString(),
+        SortOrder = tt.SortOrder
+    };
+}
+
 public class CreateSongInput
 {
     public string Title { get; set; } = string.Empty;
@@ -2684,7 +3321,7 @@ public class AdminUserDto
     public string Id { get; set; } = string.Empty;
     public string FullName { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
-    public string PasswordHash { get; set; } = string.Empty;
+    // P0-T1: PasswordHash removed so it can never be selected into the GraphQL schema.
     public int Role { get; set; }
     public bool IsEmailVerified { get; set; }
     public string? Provider { get; set; }

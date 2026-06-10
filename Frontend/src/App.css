@@ -32,6 +32,8 @@ body {
   background: linear-gradient(135deg, rgba(255, 121, 47, 0.3), rgba(255, 0, 128, 0.35));
   opacity: 0;
   transition: opacity 0.3s ease;
+  /* Decorative sheen only — must NEVER swallow clicks on buttons/links inside the card. */
+  pointer-events: none;
 }
 
 .tile:hover {

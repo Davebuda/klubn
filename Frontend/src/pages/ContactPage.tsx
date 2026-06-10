@@ -1,12 +1,13 @@
 import { useMutation } from '@apollo/client';
 import { Link } from 'react-router-dom';
-import { Mail, Phone, MapPin, Send, MessageSquare, Clock, Instagram, Music } from 'lucide-react';
+import { Mail, Phone, MapPin, Send, MessageSquare, Clock, Instagram, Facebook, Twitter, Music } from 'lucide-react';
 import ContactForm from '../components/contact/ContactForm';
 import { CREATE_CONTACT_MESSAGE } from '../graphql/queries';
 import { useAuth } from '../context/AuthContext';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 import PageSeo from '../components/common/PageSeo';
 import { ScrollReveal } from '../components/effects/ScrollReveal';
+import { isRealSocialUrl } from '../utils/social';
 
 const ContactPage = () => {
   const { siteSettings } = useSiteSettings();
@@ -33,10 +34,12 @@ const ContactPage = () => {
 
   const socialLinks = [
     { label: 'Instagram', url: siteSettings.instagramUrl, icon: Instagram },
+    { label: 'Facebook', url: siteSettings.facebookUrl, icon: Facebook },
+    { label: 'Twitter', url: siteSettings.twitterUrl, icon: Twitter },
     { label: 'TikTok', url: siteSettings.tikTokUrl, icon: Music },
     { label: 'YouTube', url: siteSettings.youTubeUrl, icon: Music },
     { label: 'SoundCloud', url: siteSettings.soundCloudUrl, icon: Music },
-  ].filter(s => s.url);
+  ].filter((s) => isRealSocialUrl(s.url));
 
   return (
     <div className="min-h-screen text-white">

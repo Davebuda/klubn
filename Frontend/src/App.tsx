@@ -1,11 +1,18 @@
+import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import Layout from './components/common/Layout';
+
+// Lazy: html5-qrcode (camera scanning) is heavy and door staff only — keep it
+// out of the main bundle.
+const ScanPage = lazy(() => import('./pages/admin/ScanPage'));
 import LandingPage from './pages/LandingPage';
 import EventsPage from './pages/EventsPage';
 import EventDetailPage from './pages/EventDetailPage';
 import DJsPage from './pages/DJsPage';
 import DJProfilePage from './pages/DJProfilePage';
 import ContactPage from './pages/ContactPage';
+import TermsPage from './pages/TermsPage';
+import PrivacyPage from './pages/PrivacyPage';
 import DashboardPage from './pages/DashboardPage';
 import TicketsPage from './pages/TicketsPage';
 import OrdersPage from './pages/OrdersPage';
@@ -33,6 +40,7 @@ import AdminPlaylistsPage from './pages/admin/AdminPlaylistsPage';
 import AdminTicketsPage from './pages/admin/AdminTicketsPage';
 import AdminSiteSettingsPage from './pages/admin/AdminSiteSettingsPage';
 import AdminGalleryPage from './pages/admin/AdminGalleryPage';
+import AdminHighlightsPage from './pages/admin/AdminHighlightsPage';
 import AdminGenresPage from './pages/admin/AdminGenresPage';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
 import AdminNewsletterPage from './pages/admin/AdminNewsletterPage';
@@ -52,6 +60,8 @@ import DJPlaylistsManager from './pages/dj/DJPlaylistsManager';
 import DJMixesManager from './pages/dj/DJMixesManager';
 import MixesPage from './pages/MixesPage';
 import AdminMixesPage from './pages/admin/AdminMixesPage';
+import EventTicketsPage from './pages/EventTicketsPage';
+import CheckoutReturnPage from './pages/CheckoutReturnPage';
 import OrganizerLayout from './components/layouts/OrganizerLayout';
 import OrganizerApplyPage from './pages/organizer/OrganizerApplyPage';
 import OrganizerDashboard from './pages/organizer/OrganizerDashboard';
@@ -63,6 +73,8 @@ const App = () => (
       <Route index element={<LandingPage />} />
       <Route path="events" element={<EventsPage />} />
       <Route path="events/:id" element={<EventDetailPage />} />
+      <Route path="events/:id/tickets" element={<EventTicketsPage />} />
+      <Route path="checkout/return" element={<CheckoutReturnPage />} />
       <Route path="djs" element={<DJsPage />} />
       <Route path="djs/:id" element={<DJProfilePage />} />
       <Route
@@ -74,6 +86,8 @@ const App = () => (
         }
       />
       <Route path="contact" element={<ContactPage />} />
+      <Route path="terms" element={<TermsPage />} />
+      <Route path="privacy" element={<PrivacyPage />} />
       <Route
         path="dashboard"
         element={
@@ -157,6 +171,24 @@ const App = () => (
       <Route path="stats" element={<DJAnalytics />} />
     </Route>
 
+    {/* Door-staff scanner: full-screen (no site chrome), Admin/CoAdmin only. */}
+    <Route
+      path="/scan"
+      element={
+        <AdminRoute>
+          <Suspense
+            fallback={
+              <div className="min-h-screen bg-black flex items-center justify-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-400" />
+              </div>
+            }
+          >
+            <ScanPage />
+          </Suspense>
+        </AdminRoute>
+      }
+    />
+
     <Route
       path="/admin"
       element={
@@ -174,6 +206,7 @@ const App = () => (
       <Route path="playlists" element={<AdminPlaylistsPage />} />
       <Route path="mixes" element={<AdminMixesPage />} />
       <Route path="gallery" element={<AdminGalleryPage />} />
+      <Route path="highlights" element={<AdminHighlightsPage />} />
       <Route path="genres" element={<AdminGenresPage />} />
       <Route path="users" element={<AdminUsersPage />} />
       <Route path="newsletter" element={<AdminNewsletterPage />} />
@@ -200,6 +233,7 @@ const App = () => (
       <Route path="mixes" element={<AdminMixesPage />} />
       <Route path="playlists" element={<AdminPlaylistsPage />} />
       <Route path="gallery" element={<AdminGalleryPage />} />
+      <Route path="highlights" element={<AdminHighlightsPage />} />
       <Route path="venues" element={<AdminVenuesPage />} />
     </Route>
   </Routes>
