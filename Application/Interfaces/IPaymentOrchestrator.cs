@@ -23,6 +23,14 @@ namespace DJDiP.Application.Interfaces
         // Shared idempotent finalize/reconcile path consumed by BOTH the webhook (P6)
         // and the paymentStatus poll (P5): drives the capture→issue state machine
         // exactly once. Idempotent under webhook+poll races and duplicate deliveries.
-        Task FinalizeAsync(PaymentEvent paymentEvent, CancellationToken ct);
+        //
+        // viaProvider (C3, design §8): the provider whose route/secret the event arrived
+        // through. The webhook controller passes the resolved route-segment name; poll
+        // paths (reconcile, sweeper, sandbox completion) pass null. When non-null and it
+        // does NOT match the located Payment.Provider (case-insensitive), the event is a
+        // cross-provider misdelivery (e.g. a stale Vipps redirect hitting /stripe) — it is
+        // WARN-logged and ignored, never processed. The authoritative provider for any
+        // capture/refund is always Payment.Provider, never global config.
+        Task FinalizeAsync(PaymentEvent paymentEvent, CancellationToken ct, string? viaProvider = null);
     }
 }

@@ -11,25 +11,30 @@ namespace DJDiP.Infrastructure.Payments
     // Real orchestration (design §3/§6), implemented in INFRASTRUCTURE so it may use EF
     // + AppDbContext. NOTE on the earlier P5 mistake: orchestration must NOT live in
     // Application (which has no EF reference) — only the IPaymentOrchestrator interface
-    // belongs there. This class is provider-agnostic: it talks to IPaymentProvider and
-    // IQrTokenService only, so Sandbox today and Vipps later are a pure DI swap.
+    // belongs there. This class is provider-agnostic: it talks to IPaymentProviderRegistry,
+    // IPaymentProvider and IQrTokenService only.
+    //
+    // C3 (design §4.3): the orchestrator no longer holds ONE injected provider. CreatePayment
+    // initiates through the registry's DEFAULT provider; Finalize/capture resolve the provider
+    // from the Payment ROW (payment.Provider) — the row knows who initiated it, so a config
+    // flip (e.g. Vipps→Stripe) can no longer break reconcile for an in-flight Vipps order.
     public sealed class PaymentOrchestrator : IPaymentOrchestrator
     {
         private readonly AppDbContext _db;
-        private readonly IPaymentProvider _provider;
+        private readonly IPaymentProviderRegistry _registry;
         private readonly IQrTokenService _qr;
         private readonly TicketingOptions _opts;
         private readonly ILogger<PaymentOrchestrator> _log;
 
         public PaymentOrchestrator(
             AppDbContext db,
-            IPaymentProvider provider,
+            IPaymentProviderRegistry registry,
             IQrTokenService qr,
             IOptions<TicketingOptions> opts,
             ILogger<PaymentOrchestrator> log)
         {
             _db = db;
-            _provider = provider;
+            _registry = registry;
             _qr = qr;
             _opts = opts.Value;
             _log = log;
@@ -51,6 +56,11 @@ namespace DJDiP.Infrastructure.Payments
             // nullable — a schema change out of scope for this slice. Require auth for now.
             if (string.IsNullOrEmpty(actingUserId))
                 throw new InvalidOperationException("Authentication required to buy tickets.");
+
+            // C3: initiate through the DEFAULT provider (C4 will let a checkout pick one).
+            // Its name is stamped on the Payment row so every later step (finalize, reconcile,
+            // webhook routing) resolves the SAME provider from the row, never global config.
+            var provider = _registry.Resolve(_registry.DefaultProvider);
 
             // Collapse duplicate lines for the same tier.
             var requested = lines
@@ -154,8 +164,8 @@ namespace DJDiP.Infrastructure.Payments
                 OrderId = order.Id,
                 Amount = order.TotalAmount,
                 Currency = "NOK",
-                PaymentMethod = _provider.Name,
-                Provider = _provider.Name,
+                PaymentMethod = provider.Name,
+                Provider = provider.Name,
                 ProviderReference = reference,        // == Order.Reference; UNIQUE
                 IdempotencyKey = reference,
                 Status = PaymentStatus.Created,        // persisted BEFORE InitiateAsync
@@ -194,7 +204,7 @@ namespace DJDiP.Infrastructure.Payments
             InitiateResult init;
             try
             {
-                init = await _provider.InitiateAsync(new InitiateRequest(
+                init = await provider.InitiateAsync(new InitiateRequest(
                     OrderRef: reference,
                     Amount: new Money(totalMinor, "NOK"),
                     ReturnUrl: returnUrl,
@@ -225,7 +235,7 @@ namespace DJDiP.Infrastructure.Payments
 
         // ---- Finalize (webhook + poll share this idempotent path) -----------------
 
-        public async Task FinalizeAsync(PaymentEvent ev, CancellationToken ct)
+        public async Task FinalizeAsync(PaymentEvent ev, CancellationToken ct, string? viaProvider = null)
         {
             // Charge-level events (e.g. Stripe charge.refunded) carry no order metadata,
             // so ev.OrderRef arrives empty — fall back to the PSP reference we stored at
@@ -243,12 +253,26 @@ namespace DJDiP.Infrastructure.Payments
                 return;
             }
 
+            // C3 cross-provider misdelivery guard (design §8): a webhook passes the route
+            // segment it arrived on as viaProvider. If that doesn't match the provider that
+            // actually initiated this Payment (the row is authoritative), the event came in
+            // on the wrong provider's endpoint — e.g. a stale Vipps redirect hitting /stripe.
+            // WARN + ignore; never process. Poll paths pass null and skip this check.
+            if (!string.IsNullOrEmpty(viaProvider) &&
+                !string.Equals(payment.Provider, viaProvider, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogWarning("FinalizeAsync: provider mismatch for {OrderRef} — payment.Provider={PaymentProvider}, arrived via {ViaProvider}; ignoring.",
+                    ev.OrderRef, payment.Provider, viaProvider);
+                return;
+            }
+
             // Layer-1 idempotency: a UNIQUE (Provider, ProviderPspReference, EventType)
-            // row. A duplicate delivery throws on SaveChanges and is a no-op.
+            // row. A duplicate delivery throws on SaveChanges and is a no-op. The provider
+            // is the ROW's provider (C3) — the payment knows who initiated it.
             var dedup = new PaymentWebhookEvent
             {
                 Id = Guid.NewGuid(),
-                Provider = _provider.Name,
+                Provider = payment.Provider,
                 ProviderPspReference = ev.PspRef ?? ev.OrderRef,
                 EventType = ev.Type.ToString(),
                 ReceivedAt = DateTime.UtcNow

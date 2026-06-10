@@ -18,7 +18,7 @@ namespace DJDiP.Infrastructure.Payments
             CancellationToken ct)
             => throw NotReady();
 
-        public Task FinalizeAsync(PaymentEvent paymentEvent, CancellationToken ct)
+        public Task FinalizeAsync(PaymentEvent paymentEvent, CancellationToken ct, string? viaProvider = null)
             => throw NotReady();
     }
 }

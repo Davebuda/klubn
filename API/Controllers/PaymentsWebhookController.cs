@@ -25,16 +25,16 @@ namespace DJDiP.API.Controllers;
 [Route("api/webhooks/payments")]
 public class PaymentsWebhookController : ControllerBase
 {
-    private readonly IPaymentProvider _provider;
+    private readonly IPaymentProviderRegistry _registry;
     private readonly IPaymentOrchestrator _orchestrator;
     private readonly ILogger<PaymentsWebhookController> _log;
 
     public PaymentsWebhookController(
-        IPaymentProvider provider,
+        IPaymentProviderRegistry registry,
         IPaymentOrchestrator orchestrator,
         ILogger<PaymentsWebhookController> log)
     {
-        _provider = provider;
+        _registry = registry;
         _orchestrator = orchestrator;
         _log = log;
     }
@@ -42,13 +42,16 @@ public class PaymentsWebhookController : ControllerBase
     [HttpPost("{provider}")]
     public async Task<IActionResult> Receive(string provider, CancellationToken ct)
     {
-        // Route segment must match the ACTIVE provider — a webhook for a provider
-        // that isn't configured can't be verified, so it can't be trusted.
-        if (!string.Equals(provider, _provider.Name, StringComparison.OrdinalIgnoreCase))
+        // Route segment must name an ENABLED provider — a webhook for a provider that
+        // isn't configured can't be verified, so it can't be trusted. (C3: resolve from
+        // the registry instead of a single active provider.)
+        if (!_registry.IsEnabled(provider))
         {
             _log.LogWarning("Webhook for inactive provider segment '{Segment}' rejected.", provider);
             return NotFound();
         }
+
+        var resolved = _registry.Resolve(provider);
 
         // The provider seam verifies over the RAW body — read it before any binding.
         string rawBody;
@@ -67,28 +70,30 @@ public class PaymentsWebhookController : ControllerBase
             headers["host"] = Request.Host.Value ?? string.Empty;
 
         // ALWAYS verify before normalize (IPaymentProvider contract).
-        if (!_provider.VerifyWebhookSignature(rawBody, headers))
+        if (!resolved.VerifyWebhookSignature(rawBody, headers))
         {
-            _log.LogWarning("Webhook signature verification FAILED for provider {Provider}.", _provider.Name);
+            _log.LogWarning("Webhook signature verification FAILED for provider {Provider}.", resolved.Name);
             return Unauthorized();
         }
 
         DJDiP.Application.DTO.PaymentDTO.PaymentEvent ev;
         try
         {
-            ev = _provider.NormalizeWebhook(rawBody, headers);
+            ev = resolved.NormalizeWebhook(rawBody, headers);
         }
         catch (Exception ex)
         {
             // Signature was valid, so this is a malformed-but-authentic payload —
             // log the shape problem (no body contents) and reject as bad request.
-            _log.LogError(ex, "Webhook normalization failed for provider {Provider}.", _provider.Name);
+            _log.LogError(ex, "Webhook normalization failed for provider {Provider}.", resolved.Name);
             return BadRequest();
         }
 
-        await _orchestrator.FinalizeAsync(ev, ct);
+        // Pass the resolved segment name so FinalizeAsync can WARN+ignore a webhook that
+        // arrives on the wrong provider's route for this Payment row (design §8).
+        await _orchestrator.FinalizeAsync(ev, ct, resolved.Name);
         _log.LogInformation("Webhook processed: {Provider} {Type} for {Reference}.",
-            _provider.Name, ev.Type, ev.OrderRef);
+            resolved.Name, ev.Type, ev.OrderRef);
 
         // Always 200 once verified+processed — duplicates are idempotent no-ops
         // inside FinalizeAsync, and a 200 stops provider retry storms.

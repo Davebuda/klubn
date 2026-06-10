@@ -192,48 +192,126 @@ builder.Services.Configure<DJDiP.Application.Services.QrOptions>(
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IQrTokenService,
     DJDiP.Application.Services.QrTokenService>();
 
-// Active payment provider, selected by config "Payments:Provider" = Vipps | Stripe |
-// Sandbox. Sandbox runs the full checkout->capture->issue->QR flow with NO PSP creds;
-// Vipps (P4) and Stripe are the same seam with a real PSP behind them. The orchestrator
-// and domain are identical under all three (design §3, L2).
+// Payment providers (C3, checkout-orchestration design §4.3): MULTI-provider registry
+// replacing the C2 single-provider DI. Backward compatible by construction.
 //
-// When unset the default is Sandbox — going live with a real PSP must always be an
-// explicit config decision, never inferred from which credentials happen to be present.
-var activeProvider = builder.Configuration["Payments:Provider"] ?? "Sandbox";
+//  - "Payments:Provider"  (existing) = the DEFAULT provider when a checkout doesn't pick
+//    one. Unset => "Sandbox" (going live with a real PSP is always an explicit decision,
+//    never inferred from which creds happen to be present).
+//  - "Payments:Providers" (NEW, CSV e.g. "Vipps,Stripe") = the ENABLED set. Unset/empty
+//    => exactly [default] — i.e. today's behaviour, zero-change. The default MUST be a
+//    member of the enabled set (fail fast otherwise).
+//
+// Each enabled provider is registered via KEYED DI under its canonical name and gets the
+// SAME fail-fast credential check it had in C2. The webhook route segment and each
+// Payment row resolve their own adapter through IPaymentProviderRegistry; a NON-keyed
+// IPaymentProvider still resolves to the default so every existing injection site is
+// unchanged.
+var defaultProvider = builder.Configuration["Payments:Provider"] ?? "Sandbox";
 
-if (activeProvider.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
+// Canonical casing the rest of the system (Payment.Provider, webhook segments) expects.
+static string CanonicalProviderName(string raw) =>
+    raw.Trim().ToLowerInvariant() switch
+    {
+        "vipps" => "Vipps",
+        "stripe" => "Stripe",
+        "sandbox" => "Sandbox",
+        _ => raw.Trim()
+    };
+
+defaultProvider = CanonicalProviderName(defaultProvider);
+
+var providersCsv = builder.Configuration["Payments:Providers"];
+var enabledProviders = (string.IsNullOrWhiteSpace(providersCsv)
+        ? new[] { defaultProvider }
+        : providersCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(CanonicalProviderName)
+            .ToArray())
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToList();
+
+if (enabledProviders.Count == 0)
+    enabledProviders.Add(defaultProvider);
+
+// The default must be one of the enabled providers — otherwise checkout would initiate
+// through an adapter that isn't registered.
+if (!enabledProviders.Contains(defaultProvider, StringComparer.OrdinalIgnoreCase))
+    throw new InvalidOperationException(
+        $"Payments:Provider='{defaultProvider}' is not in Payments:Providers " +
+        $"[{string.Join(", ", enabledProviders)}]. The default provider must be enabled.");
+
+// SAFETY (design §4.3): outside Development, the no-creds Sandbox provider must never be
+// enabled ALONGSIDE a real provider — a misconfig would let buyers self-complete free
+// tickets next to live payments. Sandbox-ONLY non-dev stays allowed (today's implicit
+// default; the runbook guards it, and completeSandboxPayment is Development-gated anyway).
+var hasSandbox = enabledProviders.Contains("Sandbox", StringComparer.OrdinalIgnoreCase);
+var hasRealProvider = enabledProviders.Any(p =>
+    !p.Equals("Sandbox", StringComparison.OrdinalIgnoreCase));
+if (!builder.Environment.IsDevelopment() && hasSandbox && hasRealProvider)
+    throw new InvalidOperationException(
+        "Payments: the Sandbox provider may not be enabled alongside a real provider " +
+        $"outside Development (enabled: [{string.Join(", ", enabledProviders)}]).");
+
+// Register each enabled provider via keyed DI + its C2 fail-fast credential check.
+var vippsCacheRegistered = false;
+foreach (var name in enabledProviders)
 {
-    // Fail fast on missing credentials — a half-configured Vipps provider must never
-    // reach a buyer. (Values come from env: Vipps__ClientId etc.; see .env.example.)
-    string[] requiredVippsKeys = ["Vipps:ClientId", "Vipps:ClientSecret", "Vipps:SubscriptionKey", "Vipps:Msn"];
-    var missing = requiredVippsKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
-    if (missing.Count > 0)
-        throw new InvalidOperationException(
-            $"Payments:Provider=Vipps but required config is missing: {string.Join(", ", missing)}. " +
-            "Set the Vipps__* environment variables (see .env.example).");
+    if (name.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
+    {
+        // Fail fast on missing credentials — a half-configured Vipps provider must never
+        // reach a buyer. (Values come from env: Vipps__ClientId etc.; see .env.example.)
+        string[] requiredVippsKeys = ["Vipps:ClientId", "Vipps:ClientSecret", "Vipps:SubscriptionKey", "Vipps:Msn"];
+        var missing = requiredVippsKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
+        if (missing.Count > 0)
+            throw new InvalidOperationException(
+                $"Payments provider Vipps is enabled but required config is missing: {string.Join(", ", missing)}. " +
+                "Set the Vipps__* environment variables (see .env.example).");
 
-    // Token is merchant-scoped — one cache for the whole process.
-    builder.Services.AddSingleton<DJDiP.Infrastructure.Payments.Vipps.VippsAccessTokenCache>();
-    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
-        DJDiP.Infrastructure.Payments.Vipps.VippsPaymentProvider>();
-}
-else if (activeProvider.Equals("Stripe", StringComparison.OrdinalIgnoreCase))
-{
-    // Same fail-fast posture as Vipps: a half-configured Stripe provider must never
-    // reach a buyer. (Values come from env: Stripe__SecretKey etc.; see .env.example.)
-    string[] requiredStripeKeys = ["Stripe:SecretKey", "Stripe:WebhookSecret"];
-    var missing = requiredStripeKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
-    if (missing.Count > 0)
-        throw new InvalidOperationException(
-            $"Payments:Provider=Stripe but required config is missing: {string.Join(", ", missing)}. " +
-            "Set the Stripe__* environment variables (see .env.example).");
+        // Token is merchant-scoped — one cache for the whole process.
+        if (!vippsCacheRegistered)
+        {
+            builder.Services.AddSingleton<DJDiP.Infrastructure.Payments.Vipps.VippsAccessTokenCache>();
+            vippsCacheRegistered = true;
+        }
+        builder.Services.AddKeyedScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+            DJDiP.Infrastructure.Payments.Vipps.VippsPaymentProvider>("Vipps");
+    }
+    else if (name.Equals("Stripe", StringComparison.OrdinalIgnoreCase))
+    {
+        // Same fail-fast posture as Vipps: a half-configured Stripe provider must never
+        // reach a buyer. (Values come from env: Stripe__SecretKey etc.; see .env.example.)
+        string[] requiredStripeKeys = ["Stripe:SecretKey", "Stripe:WebhookSecret"];
+        var missing = requiredStripeKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
+        if (missing.Count > 0)
+            throw new InvalidOperationException(
+                $"Payments provider Stripe is enabled but required config is missing: {string.Join(", ", missing)}. " +
+                "Set the Stripe__* environment variables (see .env.example).");
 
-    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
-        DJDiP.Infrastructure.Payments.Stripe.StripePaymentProvider>();
+        builder.Services.AddKeyedScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+            DJDiP.Infrastructure.Payments.Stripe.StripePaymentProvider>("Stripe");
+    }
+    else if (name.Equals("Sandbox", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddKeyedScoped<DJDiP.Application.Interfaces.IPaymentProvider,
+            DJDiP.Infrastructure.Payments.Sandbox.SandboxPaymentProvider>("Sandbox");
+    }
+    else
+        throw new InvalidOperationException(
+            $"Payments:Providers contains unknown provider '{name}'. Known: Vipps, Stripe, Sandbox.");
 }
-else
-    builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
-        DJDiP.Infrastructure.Payments.Sandbox.SandboxPaymentProvider>();
+
+// NON-keyed IPaymentProvider resolves to the DEFAULT — keeps every existing injection
+// site (CreateTicketOrder, CompleteSandboxPayment, the webhook controller before C3,
+// the orchestrator before C3) working unchanged.
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider>(sp =>
+    sp.GetRequiredKeyedService<DJDiP.Application.Interfaces.IPaymentProvider>(defaultProvider));
+
+// The registry: resolve-by-name (keyed) + the IPaymentProviderCatalog view (enabled set
+// + default) consumed by the checkout quote. One instance backs both interfaces.
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProviderRegistry>(sp =>
+    new DJDiP.Infrastructure.Payments.PaymentProviderRegistry(sp, enabledProviders, defaultProvider));
+builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProviderCatalog>(sp =>
+    sp.GetRequiredService<DJDiP.Application.Interfaces.IPaymentProviderRegistry>());
 
 // Real orchestration lives in Infrastructure (EF access) — NOT Application.
 builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentOrchestrator,
@@ -1083,7 +1161,7 @@ public class Mutation
     // decision D1 (digital delivery).
     public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto> ReconcileTicketOrder(
         string reference,
-        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
+        [Service] DJDiP.Application.Interfaces.IPaymentProviderRegistry registry,
         [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
         [Service] AppDbContext db,
         [Service] IHttpContextAccessor accessor)
@@ -1097,6 +1175,10 @@ public class Mutation
         var owner = await db.Orders.Where(o => o.Id == payment.OrderId).Select(o => o.UserId).FirstOrDefaultAsync();
         if (owner != userId)
             throw new GraphQLException("You can only reconcile your own order.");
+
+        // C3 (design §4.3): resolve the provider from the PAYMENT ROW, never global config —
+        // a config flip (Vipps→Stripe) must not break reconcile for an in-flight Vipps order.
+        var provider = registry.Resolve(payment.Provider);
 
         // Fast path: already captured — tickets exist, nothing to reconcile.
         if (payment.Status != PaymentStatus.Captured)
