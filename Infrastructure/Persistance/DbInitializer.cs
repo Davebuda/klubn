@@ -99,6 +99,79 @@ namespace DJDiP.Infrastructure.Persistance
                         ""SortOrder"" INTEGER NOT NULL DEFAULT 0,
                         ""CreatedAt"" TIMESTAMP NOT NULL DEFAULT NOW()
                       );");
+
+                // ── Ticketing + payments (P1/P2) — prod schema evolution. Runtime uses
+                // EnsureCreated, so existing Postgres DBs never receive the EF migrations;
+                // this idempotent block is the production path (same pattern as above).
+                // Back-filled columns get NO FK constraints on purpose: legacy rows
+                // (zero-guid defaults) must never block startup. The UNIQUE indexes are
+                // the correctness-critical pieces (webhook dedup + reference lookups).
+                await context.Database.ExecuteSqlRawAsync(
+                    @"CREATE TABLE IF NOT EXISTS ""TicketTypes"" (
+                        ""Id"" UUID PRIMARY KEY,
+                        ""EventId"" UUID NOT NULL REFERENCES ""Events""(""Id"") ON DELETE CASCADE,
+                        ""Name"" TEXT NOT NULL DEFAULT '',
+                        ""Description"" TEXT,
+                        ""PriceMinor"" BIGINT NOT NULL DEFAULT 0,
+                        ""VATRate"" NUMERIC NOT NULL DEFAULT 0.12,
+                        ""Currency"" TEXT NOT NULL DEFAULT 'NOK',
+                        ""Capacity"" INTEGER NOT NULL DEFAULT 0,
+                        ""QuantitySold"" INTEGER NOT NULL DEFAULT 0,
+                        ""QuantityHeld"" INTEGER NOT NULL DEFAULT 0,
+                        ""AdmitCount"" INTEGER NOT NULL DEFAULT 1,
+                        ""MinPerOrder"" INTEGER NOT NULL DEFAULT 1,
+                        ""MaxPerOrder"" INTEGER NOT NULL DEFAULT 10,
+                        ""SalesStart"" TIMESTAMP,
+                        ""SalesEnd"" TIMESTAMP,
+                        ""Status"" INTEGER NOT NULL DEFAULT 0,
+                        ""SortOrder"" INTEGER NOT NULL DEFAULT 0,
+                        CONSTRAINT ""CK_TicketType_Capacity"" CHECK (""QuantitySold"" + ""QuantityHeld"" <= ""Capacity"")
+                      );
+                      CREATE INDEX IF NOT EXISTS ""IX_TicketTypes_EventId"" ON ""TicketTypes""(""EventId"");
+                      ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""Reference"" TEXT NOT NULL DEFAULT '';
+                      ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""CustomerEmail"" TEXT;
+                      ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""HoldExpiresAt"" TIMESTAMP;
+                      CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Orders_Reference"" ON ""Orders""(""Reference"") WHERE ""Reference"" <> '';
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""Provider"" TEXT NOT NULL DEFAULT '';
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""ProviderReference"" TEXT NOT NULL DEFAULT '';
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""ProviderPspReference"" TEXT;
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""IdempotencyKey"" TEXT;
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""AuthorizedAmountMinor"" BIGINT NOT NULL DEFAULT 0;
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""CapturedAmountMinor"" BIGINT NOT NULL DEFAULT 0;
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""RefundedAmountMinor"" BIGINT NOT NULL DEFAULT 0;
+                      ALTER TABLE ""Payments"" ADD COLUMN IF NOT EXISTS ""LastSyncedAt"" TIMESTAMP;
+                      CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Payments_ProviderReference"" ON ""Payments""(""ProviderReference"") WHERE ""ProviderReference"" <> '';
+                      ALTER TABLE ""OrderItems"" ADD COLUMN IF NOT EXISTS ""TicketTypeId"" UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000';
+                      ALTER TABLE ""OrderItems"" ADD COLUMN IF NOT EXISTS ""UnitVatRate"" NUMERIC NOT NULL DEFAULT 0.12;
+                      ALTER TABLE ""OrderItems"" ADD COLUMN IF NOT EXISTS ""UnitPriceMinor"" BIGINT NOT NULL DEFAULT 0;
+                      ALTER TABLE ""OrderItems"" ADD COLUMN IF NOT EXISTS ""LineTotalMinor"" BIGINT NOT NULL DEFAULT 0;
+                      CREATE INDEX IF NOT EXISTS ""IX_OrderItems_TicketTypeId"" ON ""OrderItems""(""TicketTypeId"");
+                      ALTER TABLE ""Tickets"" ADD COLUMN IF NOT EXISTS ""OrderItemId"" UUID;
+                      ALTER TABLE ""Tickets"" ADD COLUMN IF NOT EXISTS ""TicketTypeId"" UUID;
+                      ALTER TABLE ""Tickets"" ADD COLUMN IF NOT EXISTS ""AdmitCount"" INTEGER NOT NULL DEFAULT 1;
+                      ALTER TABLE ""Tickets"" ADD COLUMN IF NOT EXISTS ""AdmitsRemaining"" INTEGER NOT NULL DEFAULT 1;
+                      ALTER TABLE ""Tickets"" ADD COLUMN IF NOT EXISTS ""RedeemedAt"" TIMESTAMP;
+                      CREATE INDEX IF NOT EXISTS ""IX_Tickets_OrderItemId"" ON ""Tickets""(""OrderItemId"");
+                      CREATE INDEX IF NOT EXISTS ""IX_Tickets_TicketTypeId"" ON ""Tickets""(""TicketTypeId"");
+                      CREATE TABLE IF NOT EXISTS ""TicketHolds"" (
+                        ""Id"" UUID PRIMARY KEY,
+                        ""OrderId"" UUID NOT NULL REFERENCES ""Orders""(""Id"") ON DELETE CASCADE,
+                        ""TicketTypeId"" UUID NOT NULL REFERENCES ""TicketTypes""(""Id""),
+                        ""Quantity"" INTEGER NOT NULL DEFAULT 0,
+                        ""ExpiresAt"" TIMESTAMP NOT NULL,
+                        ""Status"" INTEGER NOT NULL DEFAULT 0,
+                        ""CreatedAt"" TIMESTAMP NOT NULL DEFAULT NOW()
+                      );
+                      CREATE INDEX IF NOT EXISTS ""IX_TicketHolds_OrderId"" ON ""TicketHolds""(""OrderId"");
+                      CREATE INDEX IF NOT EXISTS ""IX_TicketHolds_TicketTypeId"" ON ""TicketHolds""(""TicketTypeId"");
+                      CREATE TABLE IF NOT EXISTS ""PaymentWebhookEvents"" (
+                        ""Id"" UUID PRIMARY KEY,
+                        ""Provider"" TEXT NOT NULL DEFAULT '',
+                        ""ProviderPspReference"" TEXT NOT NULL DEFAULT '',
+                        ""EventType"" TEXT NOT NULL DEFAULT '',
+                        ""ReceivedAt"" TIMESTAMP NOT NULL DEFAULT NOW()
+                      );
+                      CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PaymentWebhookEvents_Dedup"" ON ""PaymentWebhookEvents""(""Provider"", ""ProviderPspReference"", ""EventType"");");
             }
             catch { /* columns already exist or table doesn't exist yet (handled by EnsureCreated) */ }
 
