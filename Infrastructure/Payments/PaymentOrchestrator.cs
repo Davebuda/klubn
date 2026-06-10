@@ -332,7 +332,7 @@ namespace DJDiP.Infrastructure.Payments
 
                 var freeSep = _opts.CheckoutReturnUrl.Contains('?') ? '&' : '?';
                 var freeRedirect = $"{_opts.CheckoutReturnUrl}{freeSep}reference={Uri.EscapeDataString(reference)}";
-                return new CreatePaymentResult(summary, freeRedirect);
+                return new CreatePaymentResult(summary, freeRedirect, chosenProvider.Name);
             }
 
             // Provider initiate (idempotent recovery via GetStatusAsync on failure).
@@ -358,7 +358,7 @@ namespace DJDiP.Infrastructure.Payments
             payment.LastSyncedAt = now;
             await _db.SaveChangesAsync(ct);
 
-            return new CreatePaymentResult(summary, init.RedirectUrl);
+            return new CreatePaymentResult(summary, init.RedirectUrl, chosenProvider.Name);
         }
 
         // ---- Retry (multi-attempt; design §3.5/§6) --------------------------------
@@ -553,7 +553,7 @@ namespace DJDiP.Infrastructure.Payments
             payment.LastSyncedAt = now;
             await _db.SaveChangesAsync(ct);
 
-            return new CreatePaymentResult(summary, init.RedirectUrl);
+            return new CreatePaymentResult(summary, init.RedirectUrl, chosenProvider.Name);
         }
 
         // ---- Finalize (webhook + poll share this idempotent path) -----------------

@@ -24,10 +24,22 @@ namespace DJDiP.Application.DTO.PaymentDTO
     // ----- createTicketOrder input -----
     public sealed record OrderLineInput(Guid TicketTypeId, int Quantity);
 
+    // PromoCode/Provider are APPENDED optionals (C5): old clients that omit them get the
+    // pre-C5 behaviour exactly (no discount, default provider). HotChocolate maps Guid as
+    // UUID! and these as nullable String.
     public sealed record CreateTicketOrderInput(
         Guid EventId,
         List<OrderLineInput> Lines,
-        string? CustomerEmail);
+        string? CustomerEmail,
+        string? PromoCode = null,
+        string? Provider = null);
+
+    // ----- quoteTicketOrder input (C5; stateless quote — design §4.2/§5) -----
+    // Anonymous-allowed: a logged-out shopper can price a selection. Guid -> UUID!.
+    public sealed record QuoteTicketOrderInput(
+        Guid EventId,
+        List<OrderLineInput> Lines,
+        string? PromoCode = null);
 
     // createTicketOrder payload: the resolved order summary + off-site redirect + the
     // active provider name (so the UI can label "Pay with {provider}").

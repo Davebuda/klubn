@@ -20,10 +20,14 @@ namespace DJDiP.Application.DTO.PaymentDTO
         long TotalMinor,
         string Currency);
 
-    // createTicketOrder return shape (design §6).
+    // createTicketOrder return shape (design §6). Provider is the name of the provider
+    // the orchestrator ACTUALLY initiated against (default or the create/retry override),
+    // so the API surface labels "Pay with {provider}" correctly even when the request
+    // overrides the default (C5).
     public sealed record CreatePaymentResult(
         OrderSummary Order,
-        string RedirectUrl);
+        string RedirectUrl,
+        string Provider);
 
     // A line requested at checkout (server resolves price from TicketType, never client).
     public sealed record OrderLineRequest(

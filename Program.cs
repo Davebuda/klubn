@@ -525,6 +525,25 @@ public class Query
         }).ToList();
     }
 
+    // quoteTicketOrder (C5; design §4.2/§5): stateless, side-effect-free price of a
+    // selection (incl. promo). Anonymous-allowed — a logged-out shopper can price a cart;
+    // userId is passed when present (per-user promo limits), null otherwise. An invalid
+    // promo NEVER fails the quote (quote.promo.ok=false + reason); an invalid SELECTION
+    // returns a quote with ok=false + reason. Guid args are UUID! (never ID!).
+    public async Task<DJDiP.Application.DTO.PaymentDTO.CheckoutQuote> QuoteTicketOrder(
+        DJDiP.Application.DTO.PaymentDTO.QuoteTicketOrderInput input,
+        [Service] DJDiP.Application.Interfaces.ICheckoutQuoteService quotes,
+        [Service] IHttpContextAccessor accessor)
+    {
+        var userId = accessor.HttpContext?.User.FindFirst("userId")?.Value; // null when anonymous
+        var selectionLines = (input.Lines ?? new List<DJDiP.Application.DTO.PaymentDTO.OrderLineInput>())
+            .Select(l => new DJDiP.Application.DTO.PaymentDTO.CheckoutSelectionLine(l.TicketTypeId, l.Quantity))
+            .ToList();
+        var selection = new DJDiP.Application.DTO.PaymentDTO.CheckoutSelection(
+            input.EventId, selectionLines, input.PromoCode);
+        return await quotes.QuoteAsync(selection, userId, default);
+    }
+
     // Order/payment status by merchant reference (checkout-return polling).
     public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto?> TicketOrder(
         string reference,
@@ -1096,7 +1115,6 @@ public class Mutation
     public async Task<DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload> CreateTicketOrder(
         DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderInput input,
         [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
-        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
         [Service] IHttpContextAccessor accessor)
     {
         var userId = RequireAuthentication(accessor);
@@ -1105,13 +1123,37 @@ public class Mutation
             .ToList();
         try
         {
-            // C4: promoCode/provider args are exposed on the GraphQL surface in C5; until then
-            // the resolver passes null/null (default provider, no promo) — behaviour unchanged.
+            // C5: optional promoCode/provider flow through to the orchestrator. Provider in
+            // the payload is the one the orchestrator ACTUALLY used (result.Provider), not a
+            // global default — a per-request override must label "Pay with {provider}" right.
             var result = await orchestrator.CreatePaymentAsync(
                 input.EventId, lines, input.CustomerEmail, userId,
-                promoCode: null, provider: null, default);
+                promoCode: input.PromoCode, provider: input.Provider, default);
             return new DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload(
-                result.Order, result.RedirectUrl, provider.Name);
+                result.Order, result.RedirectUrl, result.Provider);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new GraphQLException(ex.Message);
+        }
+    }
+
+    // retryTicketOrderPayment (C5; design §3.5/§6): start a NEW payment attempt on an
+    // unpaid order (owner-checked inside the orchestrator). provider: null ⇒ default;
+    // otherwise IsEnabled-checked. Returns the same payload shape as createTicketOrder,
+    // with Provider = the provider this attempt actually initiated against.
+    public async Task<DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload> RetryTicketOrderPayment(
+        string reference,
+        string? provider,
+        [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
+        [Service] IHttpContextAccessor accessor)
+    {
+        var userId = RequireAuthentication(accessor);
+        try
+        {
+            var result = await orchestrator.RetryPaymentAsync(reference, provider, userId, default);
+            return new DJDiP.Application.DTO.PaymentDTO.CreateTicketOrderPayload(
+                result.Order, result.RedirectUrl, result.Provider);
         }
         catch (InvalidOperationException ex)
         {
