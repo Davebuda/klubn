@@ -512,6 +512,10 @@ export const GET_USER_TICKETS = gql`
       purchaseDate
       isValid
       isCheckedIn
+      status
+      qrCode
+      admitCount
+      admitsRemaining
       event {
         id
         title

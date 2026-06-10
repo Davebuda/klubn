@@ -1,6 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@apollo/client';
 import { Link } from 'react-router-dom';
+import { QRCodeSVG } from 'qrcode.react';
+import { QrCode, Users } from 'lucide-react';
 import { GET_USER_TICKETS, GET_EVENTS } from '../graphql/queries';
 import { useAuth } from '../context/AuthContext';
 
@@ -10,6 +12,10 @@ type Ticket = {
   totalPrice: number;
   purchaseDate: string;
   isCheckedIn: boolean;
+  status: string;
+  qrCode: string;
+  admitCount: number;
+  admitsRemaining: number;
   event: {
     id: string;
     title: string;
@@ -17,6 +23,15 @@ type Ticket = {
     venueName: string;
     city: string;
   };
+};
+
+const STATUS_STYLES: Record<string, string> = {
+  Active: 'text-green-400',
+  Used: 'text-gray-500',
+  Cancelled: 'text-red-400',
+  Refunded: 'text-red-300',
+  Expired: 'text-amber-400',
+  Transferred: 'text-blue-300',
 };
 
 type EventItem = {
@@ -28,6 +43,86 @@ type EventItem = {
   ticketingUrl?: string;
   genres: string[];
   venue: { name: string; city: string };
+};
+
+// One ticket = the dark card + an expandable "entry pass" stub. The QR panel is
+// deliberately WHITE — scanners need contrast, and it reads like a physical stub
+// torn off the dark ticket.
+const TicketCard = ({ ticket, formatter }: { ticket: Ticket; formatter: Intl.DateTimeFormat }) => {
+  const [showPass, setShowPass] = useState(false);
+  const isActive = ticket.status === 'Active' && !!ticket.qrCode;
+  const statusLabel =
+    ticket.status === 'Active' && ticket.admitsRemaining < ticket.admitCount
+      ? `Active · ${ticket.admitsRemaining} of ${ticket.admitCount} admits left`
+      : ticket.status;
+
+  return (
+    <div className="tile flex flex-col overflow-hidden">
+      <div className="flex flex-col md:flex-row">
+        <div className="md:w-1/3 bg-gradient-to-b from-orange-500/20 to-[#5D1725]/20 md:border-r border-white/5 p-6 space-y-2">
+          <p className="text-xs uppercase tracking-[0.5em] text-orange-300">Ticket</p>
+          <p className="text-white text-lg font-semibold break-words">{ticket.ticketNumber}</p>
+          <p className={`text-sm font-semibold ${STATUS_STYLES[ticket.status] ?? 'text-gray-300'}`}>
+            {statusLabel}
+          </p>
+          {ticket.admitCount > 1 && (
+            <p className="flex items-center gap-1.5 text-sm text-gray-400">
+              <Users className="w-4 h-4 text-orange-300" aria-hidden="true" />
+              Admits {ticket.admitCount}
+            </p>
+          )}
+          <p className="text-sm text-gray-500">
+            Purchased {formatter.format(new Date(ticket.purchaseDate))}
+          </p>
+        </div>
+        <div className="flex-1 p-6 flex flex-col md:flex-row gap-6">
+          <div className="flex-1 space-y-2">
+            <p className="text-xs uppercase tracking-[0.4em] text-gray-500">Event</p>
+            <p className="text-2xl font-semibold text-white">{ticket.event.title}</p>
+            <p className="text-gray-400">
+              {formatter.format(new Date(ticket.event.date))} · {ticket.event.venueName}
+              {ticket.event.city ? `, ${ticket.event.city}` : ''}
+            </p>
+            {isActive && (
+              <button
+                type="button"
+                onClick={() => setShowPass((v) => !v)}
+                aria-expanded={showPass}
+                className="mt-3 inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-gradient-to-r from-orange-400 to-[#FF6B35] text-black text-sm font-bold hover:from-orange-300 hover:to-orange-400 transition-all"
+              >
+                <QrCode className="w-4 h-4" aria-hidden="true" />
+                {showPass ? 'Hide entry pass' : 'Show entry pass'}
+              </button>
+            )}
+          </div>
+          <div className="text-right space-y-2">
+            <p className="text-xs uppercase tracking-[0.4em] text-gray-500">Price</p>
+            <p className="text-2xl font-bold text-orange-300">kr {(ticket.totalPrice ?? 0).toFixed(2)}</p>
+            <Link
+              to={`/events/${ticket.event.id}`}
+              className="text-sm uppercase tracking-[0.3em] text-orange-200 underline"
+            >
+              View Event
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {isActive && showPass && (
+        // relative z-10 lifts the stub above the tile's decorative ::after sheen so
+        // the QR stays pure white on hover (scan contrast).
+        <div className="relative z-10 border-t border-dashed border-white/20 bg-white px-6 py-8 flex flex-col items-center gap-3">
+          <QRCodeSVG value={ticket.qrCode} size={224} marginSize={2} aria-label={`Entry QR for ${ticket.ticketNumber}`} />
+          <p className="font-mono text-xs text-gray-700">{ticket.ticketNumber}</p>
+          <p className="text-[11px] uppercase tracking-[0.35em] text-gray-500">
+            {ticket.admitCount > 1
+              ? `Admits ${ticket.admitsRemaining} · show at the door`
+              : 'Show at the door'}
+          </p>
+        </div>
+      )}
+    </div>
+  );
 };
 
 const TicketsPage = () => {
@@ -132,36 +227,7 @@ const TicketsPage = () => {
 
         <div className="space-y-6">
           {tickets.map((ticket: Ticket) => (
-            <div key={ticket.id} className="tile flex flex-col md:flex-row overflow-hidden">
-              <div className="md:w-1/3 bg-gradient-to-b from-orange-500/20 to-[#5D1725]/20 border-r border-white/5 p-6 space-y-2">
-                <p className="text-xs uppercase tracking-[0.5em] text-orange-300">Ticket</p>
-                <p className="text-white text-lg font-semibold break-words">{ticket.ticketNumber}</p>
-                <p className="text-sm text-gray-300">{ticket.isCheckedIn ? 'Checked In' : 'Active'}</p>
-                <p className="text-sm text-gray-500">
-                  Purchased {formatter.format(new Date(ticket.purchaseDate))}
-                </p>
-              </div>
-              <div className="flex-1 p-6 flex flex-col md:flex-row gap-6">
-                <div className="flex-1 space-y-2">
-                  <p className="text-xs uppercase tracking-[0.4em] text-gray-500">Event</p>
-                  <p className="text-2xl font-semibold text-white">{ticket.event.title}</p>
-                  <p className="text-gray-400">
-                    {formatter.format(new Date(ticket.event.date))} · {ticket.event.venueName}
-                    {ticket.event.city ? `, ${ticket.event.city}` : ''}
-                  </p>
-                </div>
-                <div className="text-right space-y-2">
-                  <p className="text-xs uppercase tracking-[0.4em] text-gray-500">Price</p>
-                  <p className="text-2xl font-bold text-orange-300">kr {(ticket.totalPrice ?? 0).toFixed(2)}</p>
-                  <Link
-                    to={`/events/${ticket.event.id}`}
-                    className="text-sm uppercase tracking-[0.3em] text-orange-200 underline"
-                  >
-                    View Event
-                  </Link>
-                </div>
-              </div>
-            </div>
+            <TicketCard key={ticket.id} ticket={ticket} formatter={formatter} />
           ))}
         </div>
 

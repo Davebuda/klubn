@@ -3,7 +3,7 @@ import { gql } from '@apollo/client';
 // ─── Queries ────────────────────────────────────────────────────────────────
 
 export const GET_TICKET_TYPES = gql`
-  query GetTicketTypes($eventId: ID!) {
+  query GetTicketTypes($eventId: UUID!) {
     ticketTypes(eventId: $eventId) {
       id
       name
@@ -82,6 +82,21 @@ export const RECONCILE_TICKET_ORDER = gql`
       paymentState
       totalMinor
       currency
+    }
+  }
+`;
+
+// Door-scan redemption (admin/door staff only). Omitting admits redeems the whole
+// ticket in one scan; admits=N supports wave entry for group tickets.
+export const REDEEM_TICKET = gql`
+  mutation RedeemTicket($token: String!, $admits: Int) {
+    redeemTicket(token: $token, admits: $admits) {
+      ticketNumber
+      eventTitle
+      holderName
+      admittedNow
+      admitsRemaining
+      redeemedAt
     }
   }
 `;

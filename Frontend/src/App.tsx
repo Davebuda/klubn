@@ -1,5 +1,10 @@
+import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import Layout from './components/common/Layout';
+
+// Lazy: html5-qrcode (camera scanning) is heavy and door staff only — keep it
+// out of the main bundle.
+const ScanPage = lazy(() => import('./pages/admin/ScanPage'));
 import LandingPage from './pages/LandingPage';
 import EventsPage from './pages/EventsPage';
 import EventDetailPage from './pages/EventDetailPage';
@@ -161,6 +166,24 @@ const App = () => (
       <Route path="events" element={<DJEventsList />} />
       <Route path="stats" element={<DJAnalytics />} />
     </Route>
+
+    {/* Door-staff scanner: full-screen (no site chrome), Admin/CoAdmin only. */}
+    <Route
+      path="/scan"
+      element={
+        <AdminRoute>
+          <Suspense
+            fallback={
+              <div className="min-h-screen bg-black flex items-center justify-center">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-400" />
+              </div>
+            }
+          >
+            <ScanPage />
+          </Suspense>
+        </AdminRoute>
+      }
+    />
 
     <Route
       path="/admin"
