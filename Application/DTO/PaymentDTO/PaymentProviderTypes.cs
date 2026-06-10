@@ -19,7 +19,10 @@ namespace DJDiP.Application.DTO.PaymentDTO
         Refunded = 2,
         Failed = 3,
         Expired = 4,
-        Cancelled = 5
+        Cancelled = 5,
+        // Poll-only state: the provider knows the payment but the user hasn't acted yet
+        // (Vipps state CREATED). Never emitted by a webhook; FinalizeAsync ignores it.
+        Pending = 6
     }
 
     public sealed record PaymentEvent(

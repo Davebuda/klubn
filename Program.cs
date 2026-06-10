@@ -191,13 +191,26 @@ builder.Services.AddScoped<DJDiP.Application.Interfaces.IQrTokenService,
     DJDiP.Application.Services.QrTokenService>();
 
 // Active payment provider, selected by config "Payments:Provider" (default Sandbox).
-// Sandbox runs the full checkout->capture->issue->QR flow with NO Vipps creds. When
-// the Vipps adapter lands (P4) it registers by Name ("Vipps") and this becomes a
-// one-line swap — the orchestrator and domain do not change.
+// Sandbox runs the full checkout->capture->issue->QR flow with NO Vipps creds; the
+// Vipps adapter (P4) is the same seam with the real ePayment API behind it. The
+// orchestrator and domain are identical under both.
 var activeProvider = builder.Configuration["Payments:Provider"] ?? "Sandbox";
 if (activeProvider.Equals("Vipps", StringComparison.OrdinalIgnoreCase))
+{
+    // Fail fast on missing credentials — a half-configured Vipps provider must never
+    // reach a buyer. (Values come from env: Vipps__ClientId etc.; see .env.example.)
+    string[] requiredVippsKeys = ["Vipps:ClientId", "Vipps:ClientSecret", "Vipps:SubscriptionKey", "Vipps:Msn"];
+    var missing = requiredVippsKeys.Where(k => string.IsNullOrWhiteSpace(builder.Configuration[k])).ToList();
+    if (missing.Count > 0)
+        throw new InvalidOperationException(
+            $"Payments:Provider=Vipps but required config is missing: {string.Join(", ", missing)}. " +
+            "Set the Vipps__* environment variables (see .env.example).");
+
+    // Token is merchant-scoped — one cache for the whole process.
+    builder.Services.AddSingleton<DJDiP.Infrastructure.Payments.Vipps.VippsAccessTokenCache>();
     builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
-        DJDiP.Infrastructure.Payments.NotConfiguredPaymentProvider>(); // until P4 Vipps adapter
+        DJDiP.Infrastructure.Payments.Vipps.VippsPaymentProvider>();
+}
 else
     builder.Services.AddScoped<DJDiP.Application.Interfaces.IPaymentProvider,
         DJDiP.Infrastructure.Payments.Sandbox.SandboxPaymentProvider>();
@@ -1028,6 +1041,87 @@ public class Mutation
             order?.Status.ToString() ?? "Unknown",
             payment.Status.ToString(),
             payment.CapturedAmountMinor > 0 ? payment.CapturedAmountMinor : amountMinor,
+            payment.Currency);
+    }
+
+    // Poll-reconcile for real providers (P4; vipps-v1-plan "reconciliation fallback").
+    // The checkout-return page calls this once + on each poll tick. It reads the
+    // provider's live status and drives the SAME idempotent FinalizeAsync path the
+    // webhook (P6) will use — so poll + webhook can never double-issue (the CAS guard
+    // in CaptureAndIssueAsync is the backstop). Auto-capture on Authorized is locked
+    // decision D1 (digital delivery).
+    public async Task<DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto> ReconcileTicketOrder(
+        string reference,
+        [Service] DJDiP.Application.Interfaces.IPaymentProvider provider,
+        [Service] DJDiP.Application.Interfaces.IPaymentOrchestrator orchestrator,
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor accessor)
+    {
+        // Auth-gated: a caller may only reconcile their OWN order (P0: identity from JWT).
+        var userId = RequireAuthentication(accessor);
+
+        var payment = await db.Payments.FirstOrDefaultAsync(p => p.ProviderReference == reference);
+        if (payment is null) throw new GraphQLException("Order not found.");
+
+        var owner = await db.Orders.Where(o => o.Id == payment.OrderId).Select(o => o.UserId).FirstOrDefaultAsync();
+        if (owner != userId)
+            throw new GraphQLException("You can only reconcile your own order.");
+
+        // Fast path: already captured — tickets exist, nothing to reconcile.
+        if (payment.Status != PaymentStatus.Captured)
+        {
+            var snap = await provider.GetStatusAsync(reference, default);
+            // Amount = server-side DB truth (resolved at checkout), never the snapshot.
+            var amountMinor = (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+            var dbAmount = new DJDiP.Application.DTO.PaymentDTO.Money(amountMinor, payment.Currency);
+
+            switch (snap.State)
+            {
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Authorized:
+                    // Deterministic Idempotency-Key → a retried capture can't double-charge.
+                    var capture = await provider.CaptureAsync(reference, dbAmount, reference + "-capture", default);
+                    await orchestrator.FinalizeAsync(new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+                        reference, capture.PspRef, DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured,
+                        capture.CapturedAmount, DateTime.UtcNow, "{\"reconcile\":\"capture\"}"), default);
+                    break;
+
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured:
+                    // e.g. a capture call timed out client-side but landed at the provider.
+                    // Record DB truth (review H1): the provider snapshot is never trusted for
+                    // the persisted amount — a mismatch is logged for manual reconciliation.
+                    if (snap.CapturedAmount.AmountMinor > 0 && snap.CapturedAmount.AmountMinor != amountMinor)
+                        Serilog.Log.Warning(
+                            "Reconcile {Reference}: provider captured {ProviderMinor} != order total {DbMinor}; recording DB truth.",
+                            reference, snap.CapturedAmount.AmountMinor, amountMinor);
+                    await orchestrator.FinalizeAsync(new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+                        reference, snap.PspRef, DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Captured,
+                        dbAmount, DateTime.UtcNow, "{\"reconcile\":\"poll\"}"), default);
+                    break;
+
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Cancelled:
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Expired:
+                case DJDiP.Application.DTO.PaymentDTO.PaymentEventType.Failed:
+                    await orchestrator.FinalizeAsync(new DJDiP.Application.DTO.PaymentDTO.PaymentEvent(
+                        reference, snap.PspRef, snap.State,
+                        new DJDiP.Application.DTO.PaymentDTO.Money(0, payment.Currency),
+                        DateTime.UtcNow, "{\"reconcile\":\"release\"}"), default);
+                    break;
+
+                // Pending (user still in the Vipps app) / Refunded → nothing to do here.
+            }
+
+            await db.Entry(payment).ReloadAsync();
+        }
+
+        var ord = await db.Orders.FirstOrDefaultAsync(o => o.Id == payment.OrderId);
+        var totalMinor = payment.CapturedAmountMinor > 0
+            ? payment.CapturedAmountMinor
+            : (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero);
+        return new DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto(
+            reference,
+            ord?.Status.ToString() ?? "Unknown",
+            payment.Status.ToString(),
+            totalMinor,
             payment.Currency);
     }
 
