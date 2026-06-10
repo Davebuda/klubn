@@ -351,6 +351,8 @@ namespace DJDiP.Application.Services
                 UserId = ticket.UserId,
                 TicketNumber = ticket.TicketNumber,
                 QRCode = ticket.QRCode,
+                AdmitCount = ticket.AdmitCount,
+                AdmitsRemaining = ticket.AdmitsRemaining,
                 BasePrice = ticket.BasePrice,
                 VATRate = ticket.VATRate,
                 VATAmount = ticket.VATAmount,

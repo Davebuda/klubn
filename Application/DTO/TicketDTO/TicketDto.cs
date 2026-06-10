@@ -8,6 +8,10 @@ namespace DJDiP.Application.DTO.TicketDTO
         public string TicketNumber { get; set; } = string.Empty;
         public string QRCode { get; set; } = string.Empty;
 
+        // Group entry (P2/P7): one QR can admit N people; remaining decrements per wave.
+        public int AdmitCount { get; set; } = 1;
+        public int AdmitsRemaining { get; set; } = 1;
+
         // Pricing with VAT breakdown
         public decimal BasePrice { get; set; }
         public decimal VATRate { get; set; }
