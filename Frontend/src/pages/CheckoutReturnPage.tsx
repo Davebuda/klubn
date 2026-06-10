@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client';
 import { CheckCircle, Clock, AlertCircle, Ticket } from 'lucide-react';
-import { GET_TICKET_ORDER, COMPLETE_SANDBOX_PAYMENT } from '../graphql/ticketing';
+import { GET_TICKET_ORDER, COMPLETE_SANDBOX_PAYMENT, RECONCILE_TICKET_ORDER } from '../graphql/ticketing';
 import { formatMinor } from '../utils/money';
 import PageSeo from '../components/common/PageSeo';
 
@@ -20,7 +20,9 @@ const MAX_POLLS = 15;
 const CheckoutReturnPage = () => {
   const [searchParams] = useSearchParams();
   const reference = searchParams.get('reference') ?? '';
-  const isSandbox = import.meta.env.DEV;
+  // The Sandbox provider appends sandbox=1 to its return URL; the real provider
+  // (Vipps) does not. This decides which completion path drives the order forward.
+  const isSandbox = searchParams.get('sandbox') === '1' && import.meta.env.DEV;
 
   const [pollCount, setPollCount] = useState(0);
   const [sandboxDone, setSandboxDone] = useState(false);
@@ -28,6 +30,7 @@ const CheckoutReturnPage = () => {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [completeSandbox] = useMutation(COMPLETE_SANDBOX_PAYMENT);
+  const [reconcileOrder] = useMutation(RECONCILE_TICKET_ORDER);
 
   const { data, loading, error, refetch } = useQuery(GET_TICKET_ORDER, {
     variables: { reference },
@@ -36,12 +39,14 @@ const CheckoutReturnPage = () => {
   });
 
   const order: OrderStatus | undefined = data?.ticketOrder;
+  // Backend values: paymentState Created→Authorized→Captured; order status
+  // Pending→Reserved→Paid→Fulfilled (tickets issued on Captured/Fulfilled).
   const isPaid =
-    order?.paymentState === 'Paid' ||
-    order?.status === 'Confirmed' ||
-    order?.status === 'Active';
+    order?.paymentState === 'Captured' ||
+    order?.status === 'Fulfilled' ||
+    order?.status === 'Paid';
 
-  // In dev: auto-call completeSandboxPayment once, then start polling
+  // Sandbox (dev): auto-call completeSandboxPayment once, then start polling.
   useEffect(() => {
     if (!isSandbox || !reference || sandboxDone) return;
 
@@ -60,9 +65,25 @@ const CheckoutReturnPage = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSandbox, reference]);
 
-  // Poll ticketOrder until paid or max polls reached
+  // Real provider (Vipps): poll-reconcile until paid or max polls reached. The
+  // mutation is idempotent server-side (shares the webhook's exactly-once path),
+  // so calling it on every tick is safe — it captures once the user has approved
+  // in the Vipps app, and is a no-op while the payment is still pending.
   useEffect(() => {
     if (isPaid || !reference) return;
+
+    const tick = async () => {
+      if (!isSandbox) {
+        try {
+          await reconcileOrder({ variables: { reference } });
+        } catch {
+          // Transient reconcile failures are fine — the next tick retries.
+        }
+      }
+      refetch();
+    };
+
+    if (!isSandbox) tick(); // reconcile immediately on landing, not after 2s
 
     intervalRef.current = setInterval(() => {
       setPollCount((prev) => {
@@ -70,7 +91,7 @@ const CheckoutReturnPage = () => {
           if (intervalRef.current) clearInterval(intervalRef.current);
           return prev;
         }
-        refetch();
+        tick();
         return prev + 1;
       });
     }, POLL_INTERVAL_MS);
@@ -79,7 +100,7 @@ const CheckoutReturnPage = () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPaid, reference]);
+  }, [isPaid, reference, isSandbox]);
 
   // ── Missing reference ────────────────────────────────────────────────────
   if (!reference) {

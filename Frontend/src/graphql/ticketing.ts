@@ -70,3 +70,18 @@ export const COMPLETE_SANDBOX_PAYMENT = gql`
     }
   }
 `;
+
+// Real-provider (Vipps) poll-reconcile: reads the provider's live payment status and
+// idempotently finalizes (capture → issue) server-side. Safe to call repeatedly —
+// it shares the webhook's exactly-once path.
+export const RECONCILE_TICKET_ORDER = gql`
+  mutation ReconcileTicketOrder($reference: String!) {
+    reconcileTicketOrder(reference: $reference) {
+      reference
+      status
+      paymentState
+      totalMinor
+      currency
+    }
+  }
+`;
