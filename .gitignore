@@ -552,3 +552,8 @@ Frontend/*.png
 Frontend/*.jpg
 Frontend/*.jpeg
 .claude/settings.local.json
+
+# Agent/session state - never commit
+.omc/
+.scout/
+.claude/screenshots/
