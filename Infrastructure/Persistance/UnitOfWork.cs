@@ -22,7 +22,8 @@ namespace DJDiP.Infrastructure.Persistance
         private IRepository<Newsletter>? _newsletters;
         private IRepository<Notification>? _notifications;
         private IRepository<ContactMessage>? _contactMessages;
-        private IRepository<PromotionCode>? _promotionCodes;
+        private IPromoCodeRepository? _promotionCodes;
+        private ITicketTypeRepository? _ticketTypes;
         private IRepository<OrderItem>? _orderItems;
         private IRepository<DJTop10>? _djTop10s;
         private IRepository<EventDJ>? _eventDJs;
@@ -53,7 +54,8 @@ namespace DJDiP.Infrastructure.Persistance
         public IRepository<Newsletter> Newsletters => _newsletters ??= new Repository<Newsletter>(_context);
         public IRepository<Notification> Notifications => _notifications ??= new Repository<Notification>(_context);
         public IRepository<ContactMessage> ContactMessages => _contactMessages ??= new Repository<ContactMessage>(_context);
-        public IRepository<PromotionCode> PromotionCodes => _promotionCodes ??= new Repository<PromotionCode>(_context);
+        public IPromoCodeRepository PromotionCodes => _promotionCodes ??= new PromoCodeRepository(_context);
+        public ITicketTypeRepository TicketTypes => _ticketTypes ??= new TicketTypeRepository(_context);
         public IRepository<OrderItem> OrderItems => _orderItems ??= new Repository<OrderItem>(_context);
         public IRepository<DJTop10> DJTop10s => _djTop10s ??= new Repository<DJTop10>(_context);
         public IRepository<EventDJ> EventDJs => _eventDJs ??= new Repository<EventDJ>(_context);

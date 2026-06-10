@@ -16,7 +16,8 @@ namespace DJDiP.Application.Interfaces
         IRepository<Newsletter> Newsletters { get; }
         IRepository<Notification> Notifications { get; }
         IRepository<ContactMessage> ContactMessages { get; }
-        IRepository<PromotionCode> PromotionCodes { get; }
+        IPromoCodeRepository PromotionCodes { get; }
+        ITicketTypeRepository TicketTypes { get; }
         IRepository<OrderItem> OrderItems { get; }
         IRepository<DJTop10> DJTop10s { get; }
         IRepository<EventDJ> EventDJs { get; }
