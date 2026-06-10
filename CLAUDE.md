@@ -37,19 +37,34 @@ is the composition root and `<Compile Remove>`s `Domain/Application/Infrastructu
 avoid CS0436 duplicate-symbol errors, referencing them as compiled project assemblies instead.
 
 ```
-Domain/          → Entities only (Domain.csproj). No dependencies. 41 models in Domain/Models/.
+Domain/          → Entities only (Domain.csproj). No dependencies. Models in Domain/Models/ (incl. TicketType, TicketHold, PaymentWebhookEvent).
 Application/     → Services (business logic) + interfaces + DTOs + Options. References Domain.
-Infrastructure/  → EF Core: AppDbContext, repositories, UnitOfWork, migrations, DbInitializer. References Application + Domain.
-API/Controllers/ → REST controllers (FileUpload, n8n Ingest).
+Infrastructure/  → EF Core: AppDbContext, repositories, UnitOfWork, migrations, DbInitializer.
+                   ALSO Infrastructure/Payments/: PaymentOrchestrator, TicketHoldSweeper, Vipps/ + Sandbox/ provider adapters.
+API/Controllers/ → REST controllers (FileUpload, n8n Ingest, PaymentsWebhook).
+Tests/           → xUnit (QR token service, Vipps adapter — signature/normalize/mapping).
 Program.cs       → Composition root: DI, middleware, JWT, CORS, AND the entire GraphQL schema (Query/Mutation resolvers, inline).
 Frontend/        → React SPA (separate build/deploy). See Frontend/AGENTS.md.
 ```
 
-**The GraphQL schema lives inline in `Program.cs`** (a ~2700-line file): `public class Query` at
-`Program.cs:333`, `public class Mutation` at `Program.cs:832`, registered via
-`.AddGraphQLServer().AddQueryType<Query>().AddMutationType<Mutation>()` (`Program.cs:187`). There are
+**The GraphQL schema lives inline in `Program.cs`** (a ~3000-line file): search for
+`public class Query` / `public class Mutation` (line numbers drift — don't trust stale references),
+registered via `.AddGraphQLServer().AddQueryType<Query>().AddMutationType<Mutation>()`. There are
 **no** separate GraphQL type/resolver files — to add a query or mutation you edit `Program.cs`. The
 resolvers call into `Application` services (constructor-injected).
+
+## Ticketing & payments (live as of 2026-06-10)
+Design of record: `docs/design/ticketing-vipps-architecture.md` · prod cutover: `docs/runbooks/vipps-production.md`.
+
+- **Provider-agnostic seam**: `IPaymentProvider` (Application/Interfaces) — impls `Sandbox` (dev, no creds)
+  and `Vipps` (real ePayment); selected by config `Payments:Provider`. Adding Stripe = one new class, zero domain change.
+- **Money through the seam is minor units (øre, `long`)** — the `Money` record; `decimal` only on DB price columns.
+- **Exactly-once issuance**: webhook (`POST /api/webhooks/payments/{provider}`) and the checkout-return
+  poll (`reconcileTicketOrder`) share `PaymentOrchestrator.FinalizeAsync` — dedup row + CAS guard.
+  Never write a second capture/issue path.
+- **QR door tokens**: HMAC-SHA256, signed with `Qr__SigningSecret`; redeemed via `redeemTicket` (atomic
+  single-use, wave entry for group tickets). Scanner UI at `/scan` (admin), wallet QR on `/tickets`.
+- Production Vipps webhook is REGISTERED for klubn.no (see runbook for id/details).
 
 ## Conventions
 Verified from `Application/Services/*.cs`, `Application/Interfaces/*.cs`, `Infrastructure/Persistance/`.
@@ -77,14 +92,17 @@ external n8n workflow that scrapes social media:
 
 ## Scripts
 **Backend** (run from repo root):
-- `dotnet run --project DJDiP.csproj` — start API (binds `ASPNETCORE_URLS`, default `http://+:5000`; GraphQL at `/graphql`).
+- `.\scripts\run-dev.ps1` — **preferred dev start**: loads `.env`, maps `VIPPS_*`/`EMAIL_*` → .NET config keys, pre-checks creds, runs the API. `-Provider Sandbox` forces the no-creds payment flow.
+- `dotnet run --project DJDiP.csproj` — raw start (needs `Jwt__Key` 32+ chars in env; appsettings keys are deliberately empty).
 - `dotnet build DJ-DiP.sln` — build the solution.
+- `dotnet test Tests/Tests.csproj` — xUnit suite (QR + Vipps adapter).
 - `dotnet ef migrations add <Name> --project Infrastructure --startup-project .` — add a migration.
-- Migrations + seed run automatically on startup via `DbInitializer.InitializeAsync` (`Program.cs:220`).
+- `python scripts/register-vipps-webhook.py [--list|--delete <id>]` — one-time Vipps webhook subscription management (reads `.env`).
+- Migrations + seed run automatically on startup via `DbInitializer.InitializeAsync`.
 
-**Frontend** (`cd Frontend`): `npm run dev` (Vite, :5173) · `npm run build` (`tsc -b && vite build`) · `npm run lint` · `npm run preview`.
+**Frontend** (`cd Frontend`): `npm run dev` (Vite, **:3000, strictPort**) · `npm run build` (`tsc -b && vite build`) · `npm run lint` (currently broken — see Gotchas) · `npm run preview`.
 
-**Docker (full stack):** `docker compose up -d --build` (needs an external `traefik-public` network + populated `.env`).
+**Docker (full stack):** `docker compose up -d --build` (needs an external `traefik-public` network + populated `.env`; compose **refuses to start without `QR_SIGNING_SECRET`**).
 
 ## Environment variables
 Names from `.env.example` / `docker-compose.yml` — never commit values. Double-underscore = .NET config nesting.
@@ -98,11 +116,18 @@ Names from `.env.example` / `docker-compose.yml` — never commit values. Double
 - **Rate limit:** `RateLimit__PermitLimit`, `RateLimit__Window`, `RateLimit__QueueLimit`.
 - **Email (MailKit):** `Email__Enabled`, `Email__SmtpHost`, `Email__SmtpPort`, `Email__UseSsl`, `Email__Username`, `Email__Password`, `Email__FromAddress`, `Email__FromName`.
 - **Host/runtime:** `ASPNETCORE_ENVIRONMENT`, `ASPNETCORE_URLS`, `AppSettings__BaseUrl`, `AppSettings__FrontendUrl`.
+- **Payments/ticketing:** `Payments__Provider` (`Sandbox`|`Vipps`), `Vipps__ClientId/ClientSecret/SubscriptionKey/Msn/BaseUrl/WebhookSecret/SystemName`, `Qr__SigningSecret` (**required; rotating it invalidates every issued ticket QR**), `Ticketing__CheckoutReturnUrl/HoldMinutes/SweepIntervalSeconds/SweepGraceMinutes`, `Sandbox__WebhookSecret`. Compose maps `VIPPS_*`/`PAYMENTS_PROVIDER`/`QR_SIGNING_SECRET`/`TICKETING_*` to these.
 - **Deploy:** `ACME_EMAIL`, `POSTGRES_DB/USER/PASSWORD`, `BACKEND_URL`, `FRONTEND_URL`.
 - **Frontend build args (baked at build time):** `VITE_API_URL` (GraphQL HTTP), `VITE_WS_URL`, `VITE_UPLOAD_API_URL`.
 
 ## Gotchas
-- **GraphQL schema is in `Program.cs`, not in type files.** Don't go looking for `*.Query.cs`. Edit `Program.cs` (`Query`@333 / `Mutation`@832).
+- **GraphQL schema is in `Program.cs`, not in type files.** Don't go looking for `*.Query.cs` — search `public class Query` / `public class Mutation` in `Program.cs`.
+- **GraphQL `Guid` parameters are `UUID!`, not `ID!`.** A frontend query declaring `$id: ID!` against a `Guid` resolver arg 400s at runtime (HotChocolate type mismatch) — this shipped broken once.
+- **Vipps prod MSN ≠ test MSN.** The production sales unit has its own Merchant Serial Number; sending the test unit's MSN against `api.vipps.no` returns 403 on every API **even with a valid token**. Check the MSN shown next to the keys in the portal.
+- **Vipps webhook event names use the PLURAL `epayments.` prefix** (`epayments.payment.captured.v1`); the singular form is rejected with 400. The webhook *payload*'s `name` field is just `"CAPTURED"` etc.
+- **Never rotate `Qr__SigningSecret` while events with issued tickets are upcoming** — every existing ticket QR becomes invalid.
+- **Vite dev server is pinned to :3000 with `strictPort`** (`Frontend/vite.config.ts`) — not 5173. Local backend `Ticketing__CheckoutReturnUrl` must point at the real frontend port.
+- **`npm run lint` is broken** (pre-existing): `eslint.config.js` is v9 flat-config style but eslint ^8 is installed. The real type gate is `npm run build` (`tsc -b`).
 - **`DJDiP` everywhere in code is intentional**, not stale — see naming note up top. The brand is KlubN; the code identity is DJDiP.
 - **HotChocolate 13 returns HTTP 500 when a non-null field resolves null** (GraphQL-over-HTTP). The frontend works around this in `Frontend/src/apollo-client.ts` by rewriting 500-with-error-body responses to 200. Don't "fix" that fetch wrapper without understanding why it exists.
 - **Three DB providers are referenced** (SQLite/Postgres/SqlServer). The active one is chosen by the connection string, not by code — dev uses SQLite `DJDIP.db`, prod uses Postgres.
@@ -113,5 +138,7 @@ Names from `.env.example` / `docker-compose.yml` — never commit values. Double
 - Don't expose the backend directly on 80/443 — Traefik terminates TLS and routes `/graphql`, `/api`, `/health`, `/uploads`, `/sitemap.xml` to it on `:5000`.
 - Don't add a new GraphQL field that returns a `Domain` entity if a DTO exists for it — map to the DTO.
 - Don't bypass `IUnitOfWork` in a service to touch `AppDbContext` directly.
-- Don't hardcode secrets — everything sensitive comes from env (`Jwt__Key`, `N8N_SECRET`, `ADMIN_DEFAULT_PASSWORD`, Stripe keys).
+- Don't hardcode secrets — everything sensitive comes from env (`Jwt__Key`, `N8N_SECRET`, `ADMIN_DEFAULT_PASSWORD`, Vipps/Stripe keys).
+- Don't write a second payment capture/issue path — everything finalizes through `PaymentOrchestrator.FinalizeAsync` (dedup + CAS exactly-once guard).
+- Don't run `Payments__Provider=Sandbox` in production (defense-in-depth exists — `completeSandboxPayment` is Development-gated — but don't rely on it).
 - Don't delete the stale Feb-19 root docs without reading `docs/DOC-AUDIT.md` first.

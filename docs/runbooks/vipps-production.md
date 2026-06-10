@@ -1,7 +1,7 @@
 # Runbook — Vipps in production (klubn.no)
 
-**Status:** ready to execute · 2026-06-10
-**Prereqs done:** P0–P10 ticketing slice runtime-verified; live Vipps **TEST** payment captured end-to-end (reserve → capture → ticket + QR → scan → refund).
+**Status:** steps 0 + 3 DONE · remaining: deploy (1–2) + smoke test (4) · updated 2026-06-10
+**Prereqs done:** P0–P10 ticketing slice runtime-verified; live Vipps **TEST** payment captured end-to-end (reserve → capture → ticket + QR → scan → refund). **PROD keys obtained and verified** (⚠️ the production sales unit MSN is **different** from the test unit's — wrong MSN ⇒ 403 on every API even with a valid token). **Production webhook REGISTERED** (step 3).
 
 ---
 
@@ -52,21 +52,16 @@ git pull && docker compose up -d --build backend frontend
 docker compose logs backend | grep -i "vipps\|fail"   # expect clean start
 ```
 
-## 3. Register the webhook (one-time, after deploy)
+## 3. Register the webhook — ✅ DONE 2026-06-10
 
-On the VPS (or any machine with the PROD values in `.env`):
+Registered: `https://klubn.no/api/webhooks/payments/vipps`
+Webhook id: `d3986ab9-63b3-4d98-8d26-bc0a543bc942` · events: all 8 `epayments.payment.*.v1`
+(note the **plural** `epayments.` prefix — singular is rejected with 400).
 
-```bash
-python scripts/register-vipps-webhook.py            # registers https://klubn.no/api/webhooks/payments/vipps
-```
+The secret is stored as `VIPPS_WEBHOOK_SECRET` in the **local** repo `.env` —
+**copy that line to the VPS `/opt/djdip/.env` during step 1.**
 
-It prints `VIPPS_WEBHOOK_SECRET=...` **once** — add it to the server `.env`, then:
-
-```bash
-docker compose up -d backend
-```
-
-(`--list` shows registrations; `--delete <id>` + re-register if the secret is lost.)
+If the secret is ever lost: `python scripts/register-vipps-webhook.py --delete d3986ab9-63b3-4d98-8d26-bc0a543bc942` and re-register (`--list` shows registrations).
 
 ## 4. Production smoke test (real money!)
 

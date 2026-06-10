@@ -1,6 +1,7 @@
 # Ticketing + Vipps — Authoritative Architecture (multi-type tickets, provider-agnostic)
 
 **Status:** ✅ authoritative design · supersedes `ticketing-vipps-design.md` (scope) and `vipps-v1-plan.md` (scope)
+**Implementation:** ✅ P0–P10 BUILT + runtime-verified 2026-06-10 (incl. live Vipps TEST payment, P8 wallet-QR + `/scan` UI, real refunds, hold sweeper, prod webhook registered). Deploy steps: `docs/runbooks/vipps-production.md`. P11 items remain deferred.
 **Date:** 2026-06-08
 **Backing research:** industry + official docs (Vipps, Stripe, Meta/Instagram, Apple/Google Wallet) — citations at the end. *(Perplexity MCP was down; research used direct doc fetches + a technical-researcher lane.)*
 **Mandate from product owner:** authority granted to make the best architecture choices, provided **Stripe can be added later with zero breaking changes** and **the buyer never sees a bare Vipps payment screen without ticket details.**
