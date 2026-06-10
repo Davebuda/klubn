@@ -36,7 +36,7 @@ const OrdersPage = () => {
   const orders: Order[] = data?.ticketsByUser ?? [];
 
   const filteredOrders = useMemo(() => {
-    let filtered = orders.filter((order) => {
+    const filtered = orders.filter((order) => {
       // Search filter
       const matchesSearch =
         order.event.title.toLowerCase().includes(searchQuery.toLowerCase()) ||

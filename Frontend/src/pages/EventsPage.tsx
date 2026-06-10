@@ -87,7 +87,7 @@ const EventsPage = () => {
 
   // Sort events: upcoming first (by date asc), then past events at the end
   const sortedEvents = useMemo(() => {
-    let filtered = events.filter((event) => {
+    const filtered = events.filter((event) => {
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
       return (
