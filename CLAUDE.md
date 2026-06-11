@@ -53,8 +53,10 @@ registered via `.AddGraphQLServer().AddQueryType<Query>().AddMutationType<Mutati
 **no** separate GraphQL type/resolver files — to add a query or mutation you edit `Program.cs`. The
 resolvers call into `Application` services (constructor-injected).
 
-## Ticketing & payments (live as of 2026-06-10)
-Design of record: `docs/design/ticketing-vipps-architecture.md` · prod cutover: `docs/runbooks/vipps-production.md`.
+## Ticketing & payments (live as of 2026-06-10; checkout layer 2026-06-11)
+Design of record: `docs/design/ticketing-vipps-architecture.md` (seam) +
+`docs/design/checkout-orchestration.md` (promo/quote/provider-choice/multi-attempt layer) ·
+prod cutover: `docs/runbooks/vipps-production.md` + `docs/runbooks/checkout-rollout.md`.
 
 - **Provider-agnostic seam**: `IPaymentProvider` (Application/Interfaces) — impls `Sandbox` (dev, no creds)
   and `Vipps` (real ePayment); selected by config `Payments:Provider`. Adding Stripe = one new class, zero domain change.
@@ -65,6 +67,18 @@ Design of record: `docs/design/ticketing-vipps-architecture.md` · prod cutover:
 - **QR door tokens**: HMAC-SHA256, signed with `Qr__SigningSecret`; redeemed via `redeemTicket` (atomic
   single-use, wave entry for group tickets). Scanner UI at `/scan` (admin), wallet QR on `/tickets`.
 - Production Vipps webhook is REGISTERED for klubn.no (see runbook for id/details).
+- **Checkout layer (2026-06-11)**: promo codes (PromotionCode v2 + `PromoRedemption`, hold-style
+  usage reservation mirroring inventory), stateless quote (`quoteTicketOrder` query +
+  `POST /api/checkout/quote`), per-checkout provider choice (`Payments__Providers` CSV enables
+  several; registry resolves per Payment row — never global config on the inbound path),
+  multi-attempt payments (`Payment.AttemptNo`, retry reference `"{Order.Reference}-r{N}"`,
+  order-level CAS = the real exactly-once guard now), hidden tiers (`TicketType.IsHidden`,
+  unlockable by promo server-side; FE reveal is a known TODO), zero-total (100% promo) orders,
+  post-commit confirmation email. REST surface: `POST /api/checkout/{quote,create,retry}`.
+  Runtime E2E suite: `scripts/e2e/` (self-seeding; needs a FRESH SQLite DB — SQLite rejects
+  `ADD COLUMN IF NOT EXISTS`, so DbInitializer catch-up DDL is Postgres-only by design).
+  Capture re-reserves released holds (or refuses + auto-refunds); reconcile never resurrects
+  terminal-failed payments. No admin CRUD for promos yet — SQL inserts per the rollout runbook.
 
 ## Conventions
 Verified from `Application/Services/*.cs`, `Application/Interfaces/*.cs`, `Infrastructure/Persistance/`.

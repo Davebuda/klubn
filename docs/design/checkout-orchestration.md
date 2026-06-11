@@ -1,6 +1,17 @@
 # Checkout Orchestration — Design of Record
 
-**Status:** P0 (design) · 2026-06-10
+**Status:** IMPLEMENTED + runtime-verified 2026-06-11 (commits 9a5e59d..5f52f0a).
+C1–C8 + C10–C11 done: 155 unit tests green, opus review APPROVE (after fixes 7782237),
+runtime E2E suite green (132 checks, `scripts/e2e/`), frontend click-through proven
+(promo, provider quote totals, retry `{ref}-r2`, wallet QR — screenshots in
+`.claude/screenshots/checkout/`). The click-through found+fixed a real bug (aef7b1e):
+reconcile could resurrect terminal-failed payments (sandbox synthetic-Authorized) and
+capture-after-hold-release issued tickets without committing inventory — both now
+guarded; capture re-reserves or refuses+refunds.
+**C9 (live Stripe/Vipps test legs) PENDING:** blocked on credentials — repo-root `.env`
+no longer exists on the dev machine. Stripe CLI is installed; run the live legs when
+keys are restored. Hidden-tier FRONTEND reveal is a known follow-up (backend gating
+works; see TODO(checkout-fe) in EventTicketsPage.tsx).
 **Extends:** `docs/design/ticketing-vipps-architecture.md` (still authoritative for the
 provider seam, exactly-once strategy, QR, and the Vipps adapter). This doc covers the
 checkout DOMAIN layer that sits on top: quotes, promo codes, provider choice,
