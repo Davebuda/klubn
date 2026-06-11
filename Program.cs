@@ -1244,6 +1244,34 @@ public class Mutation
         // a config flip (Vipps→Stripe) must not break reconcile for an in-flight Vipps order.
         var provider = registry.Resolve(payment.Provider);
 
+        // TERMINAL-FAILED GUARD (design §3.5/§8): reconcile is a PENDING-payment fallback,
+        // NEVER a resurrection path. If a signed webhook already drove this attempt to a
+        // terminal-failed state (Failed/Aborted/Expired/Terminated), that is the truth — the
+        // money was never taken, the order was Cancelled, the holds/promo were Released.
+        // Returning the current status here (no GetStatus, no capture) is the WHOLE of Fix 1
+        // for this bug class:
+        //   • Sandbox's GetStatusAsync hands back a SYNTHETIC Authorized snapshot for ANY
+        //     reference, so without this guard a /checkout/return poll on a Failed order would
+        //     CaptureAsync + FinalizeAsync(Captured) and issue a ghost ticket nobody paid for.
+        //   • The general principle holds for real providers too: a verified webhook is
+        //     authoritative over a poll snapshot; resurrecting a terminal payment via the poll
+        //     would double-issue against a payment that failed.
+        // The buyer's only forward path from here is retryTicketOrderPayment (a NEW attempt).
+        // The Captured fast-path below still short-circuits paid orders (tickets already exist).
+        if (payment.Status is PaymentStatus.Failed or PaymentStatus.Aborted
+                            or PaymentStatus.Expired or PaymentStatus.Terminated)
+        {
+            var ord0 = await db.Orders.FirstOrDefaultAsync(o => o.Id == payment.OrderId);
+            return new DJDiP.Application.DTO.PaymentDTO.TicketOrderStatusDto(
+                reference,
+                ord0?.Status.ToString() ?? "Unknown",
+                payment.Status.ToString(),
+                payment.CapturedAmountMinor > 0
+                    ? payment.CapturedAmountMinor
+                    : (long)Math.Round(payment.Amount * 100m, MidpointRounding.AwayFromZero),
+                payment.Currency);
+        }
+
         // Fast path: already captured — tickets exist, nothing to reconcile.
         if (payment.Status != PaymentStatus.Captured)
         {

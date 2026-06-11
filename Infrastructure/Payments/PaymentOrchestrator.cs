@@ -773,51 +773,82 @@ namespace DJDiP.Infrastructure.Payments
             if (orderClaimed != 1)
             {
                 // Another attempt already fulfilled this order. Roll back the issue work, but
-                // the money for THIS attempt was captured by the provider — record that truth.
+                // the money for THIS attempt was captured by the provider — record that truth,
+                // refund, and CRITICAL-log via the shared loser path (design §3.5).
                 await tx.RollbackAsync(ct);
-
-                payment.Status = PaymentStatus.Captured;
-                payment.CapturedAmountMinor = ev.Amount.AmountMinor;
-                payment.ProviderPspReference = ev.PspRef ?? payment.ProviderPspReference;
-                payment.LastSyncedAt = DateTime.UtcNow;
-                await _db.SaveChangesAsync(ct);
-
-                _log.LogCritical(
-                    "CaptureAndIssue: DUPLICATE capture for order {Reference} (attempt {AttemptRef}) — order already fulfilled by another attempt; auto-refunding {Minor} {Currency}.",
-                    order.Reference, payment.ProviderReference, ev.Amount.AmountMinor, ev.Amount.Currency);
-
-                // Best-effort auto-refund via THIS payment's provider (design §3.5). A refund
-                // failure stays CRITICAL-logged for the reconcile runbook — it never throws out
-                // of FinalizeAsync (the webhook must still 200).
-                if (ev.Amount.AmountMinor > 0)
-                {
-                    try
-                    {
-                        var prov = _registry.Resolve(payment.Provider);
-                        await prov.RefundAsync(
-                            payment.ProviderReference, ev.Amount,
-                            payment.ProviderReference + "-dup-refund", ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        _log.LogCritical(ex,
-                            "CaptureAndIssue: auto-refund FAILED for duplicate capture {AttemptRef} — manual reconcile required.",
-                            payment.ProviderReference);
-                    }
-                }
+                await RecordCapturedRefundAndCancelAsync(
+                    payment, ev, order,
+                    idemSuffix: "-dup-refund",
+                    reason: $"DUPLICATE capture for order {order.Reference} (attempt {payment.ProviderReference}) — order already fulfilled by another attempt",
+                    cancelOrder: false,   // the order is already Fulfilled by the winning attempt; do not touch it
+                    ct);
                 return;
             }
 
-            // Commit each hold: held -> sold (atomic, never goes negative).
-            foreach (var hold in order.Holds.Where(h => h.Status == TicketHoldStatus.Active))
+            // Commit each hold: held -> sold (atomic, never goes negative). With multi-attempt
+            // payments AND the sweeper, a hold may NOT be Active by the time we capture:
+            //   • the TicketHoldSweeper expired it (real prod Vipps race: user approves at 9:59,
+            //     sweeper expires the hold at 10:00, captured.v1 lands at 10:01); OR
+            //   • a Failed/Cancelled/Expired webhook released it, then reconcile/late-webhook
+            //     drove us here anyway.
+            // The OLD code did `.Where(Status == Active)` and SILENTLY SKIPPED non-Active holds,
+            // issuing a ticket while QuantitySold was never incremented — a ghost ticket outside
+            // inventory accounting. Fix 2: every hold MUST commit inventory or we MUST NOT issue.
+            foreach (var hold in order.Holds)
             {
-                await _db.Database.ExecuteSqlInterpolatedAsync(
+                if (hold.Status == TicketHoldStatus.Active)
+                {
+                    // Active hold: the held units are already counted in QuantityHeld; move them
+                    // held -> sold atomically (never negative).
+                    await _db.Database.ExecuteSqlInterpolatedAsync(
+                        $@"UPDATE ""TicketTypes""
+                           SET ""QuantitySold"" = ""QuantitySold"" + {hold.Quantity},
+                               ""QuantityHeld"" = CASE WHEN ""QuantityHeld"" >= {hold.Quantity}
+                                                       THEN ""QuantityHeld"" - {hold.Quantity} ELSE 0 END
+                           WHERE ""Id"" = {hold.TicketTypeId}", ct);
+                    hold.Status = TicketHoldStatus.Committed;
+                    continue;
+                }
+
+                // Released/Expired hold: the units are NO LONGER in QuantityHeld (the sweeper /
+                // Failed-release already gave them back). Re-reserve AND commit in one atomic
+                // conditional UPDATE — straight to QuantitySold (no Held leg, we commit now) —
+                // gated on real availability so we can't oversell.
+                var reReserved = await _db.Database.ExecuteSqlInterpolatedAsync(
                     $@"UPDATE ""TicketTypes""
-                       SET ""QuantitySold"" = ""QuantitySold"" + {hold.Quantity},
-                           ""QuantityHeld"" = CASE WHEN ""QuantityHeld"" >= {hold.Quantity}
-                                                   THEN ""QuantityHeld"" - {hold.Quantity} ELSE 0 END
-                       WHERE ""Id"" = {hold.TicketTypeId}", ct);
-                hold.Status = TicketHoldStatus.Committed;
+                       SET ""QuantitySold"" = ""QuantitySold"" + {hold.Quantity}
+                       WHERE ""Id"" = {hold.TicketTypeId}
+                         AND (""Capacity"" - ""QuantitySold"" - ""QuantityHeld"") >= {hold.Quantity}", ct);
+
+                if (reReserved == 1)
+                {
+                    hold.Status = TicketHoldStatus.Committed;
+                    _log.LogWarning(
+                        "CaptureAndIssue: capture after hold release for {Reference} (tier {TicketTypeId}, qty {Qty}); re-reserved.",
+                        order.Reference, hold.TicketTypeId, hold.Quantity);
+                    continue;
+                }
+
+                // 0 rows ⇒ genuinely sold out meanwhile (someone else took the inventory while
+                // this hold was released). We CANNOT issue. Roll the whole issue tx back, but the
+                // money WAS taken — record Captured, refund, CRITICAL-log, and Cancel the order.
+                await tx.RollbackAsync(ct);
+
+                // The rollback reverted the DB, but EF's change tracker still holds the in-memory
+                // hold.Status=Committed mutations set on EARLIER loop iterations. Resync those
+                // tracked holds from the (rolled-back) DB so the helper's SaveChanges persists
+                // ONLY the payment/order truth, never a stale Committed hold against released
+                // inventory.
+                foreach (var h in order.Holds)
+                    await _db.Entry(h).ReloadAsync(ct);
+
+                await RecordCapturedRefundAndCancelAsync(
+                    payment, ev, order,
+                    idemSuffix: "-oversold-refund",
+                    reason: $"capture for order {order.Reference} but tier {hold.TicketTypeId} (qty {hold.Quantity}) sold out while the hold was released — cannot issue",
+                    cancelOrder: true,    // no winning attempt here; this order is dead — Cancel it
+                    ct);
+                return;
             }
 
             // Promo CONSUMPTION (design §3.1/§8): make the reservation permanent inside the
@@ -923,6 +954,54 @@ namespace DJDiP.Infrastructure.Payments
             catch (Exception ex)
             {
                 _log.LogError(ex, "CaptureAndIssue: confirmation email send failed for {Reference} (non-fatal).", order.Reference);
+            }
+        }
+
+        // Shared "the money was taken but we could NOT issue" loser path (design §3.5/§8).
+        // Used by BOTH the duplicate-capture branch (another attempt won) and the oversold
+        // branch (the released hold could not be re-reserved). Runs AFTER the issue tx has been
+        // rolled back: records the capture as DB truth on a SEPARATE save (so it survives the
+        // rollback), best-effort auto-refunds via THIS payment's provider with a deterministic
+        // idemKey, and CRITICAL-logs. A refund failure stays CRITICAL-logged for the reconcile
+        // runbook — it never throws out of FinalizeAsync (the webhook must still 200).
+        //   cancelOrder=false: another attempt already Fulfilled this order — leave it alone.
+        //   cancelOrder=true : no winning attempt — this order is dead, Cancel it.
+        private async Task RecordCapturedRefundAndCancelAsync(
+            Payment payment, PaymentEvent ev, Order order,
+            string idemSuffix, string reason, bool cancelOrder, CancellationToken ct)
+        {
+            payment.Status = PaymentStatus.Captured;
+            payment.CapturedAmountMinor = ev.Amount.AmountMinor;
+            payment.ProviderPspReference = ev.PspRef ?? payment.ProviderPspReference;
+            payment.LastSyncedAt = DateTime.UtcNow;
+
+            if (cancelOrder && order.Status is not (OrderStatus.Fulfilled or OrderStatus.Refunded))
+            {
+                order.Status = OrderStatus.Cancelled;
+                order.HoldExpiresAt = null;
+            }
+
+            await _db.SaveChangesAsync(ct);
+
+            _log.LogCritical(
+                "CaptureAndIssue: {Reason}; auto-refunding {Minor} {Currency} (attempt {AttemptRef}).",
+                reason, ev.Amount.AmountMinor, ev.Amount.Currency, payment.ProviderReference);
+
+            if (ev.Amount.AmountMinor > 0)
+            {
+                try
+                {
+                    var prov = _registry.Resolve(payment.Provider);
+                    await prov.RefundAsync(
+                        payment.ProviderReference, ev.Amount,
+                        payment.ProviderReference + idemSuffix, ct);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogCritical(ex,
+                        "CaptureAndIssue: auto-refund FAILED for {AttemptRef} — manual reconcile required.",
+                        payment.ProviderReference);
+                }
             }
         }
 

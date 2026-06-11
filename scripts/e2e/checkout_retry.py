@@ -137,6 +137,57 @@ def main():
             fpay["Status"] == h.PAY_CAPTURED and fpay["CapturedAmountMinor"] == 0,
             f"status={fpay['Status']} captured={fpay['CapturedAmountMinor']}")
 
+    # ============ FIX 1: reconcile CANNOT resurrect a terminal-failed payment ===
+    # The live bug: a signed Failed webhook drives payment->Failed / order->Cancelled /
+    # holds->Released / promo->Released. Then /checkout/return polls reconcileTicketOrder
+    # WITHOUT the sandbox param. Sandbox.GetStatusAsync returns a SYNTHETIC Authorized
+    # snapshot for ANY reference, so the OLD reconcile would CaptureAsync + Finalize(Captured)
+    # and ISSUE a ghost ticket nobody paid for. The terminal-failed guard must short-circuit:
+    # no GetStatus, no capture, order STAYS Cancelled, payment STAYS Failed, NO tickets.
+    rga = h.seed_ticket_type(event_id=c.event_id, name=f"RT-RECON-{run}", price_minor=25000,
+                             capacity=10, max_per_order=10)
+    rtok, ruid, remail = h.register_user("recon")
+    st, rcresp = h.rest("POST", "/api/checkout/create",
+                        {"eventId": c.event_id, "customerEmail": remail,
+                         "lines": [{"ticketTypeId": rga, "quantity": 2}]}, rtok)
+    L.check("recon create -> 200", st == 200, f"status={st} {rcresp}")
+    rcref = rcresp["order"]["reference"]
+    sold_b, held_b, _ = h.tt_counters(rga)
+    L.check("recon after create: Held=2 Sold=0", held_b == 2 and sold_b == 0, f"sold={sold_b} held={held_b}")
+
+    # Signed Failed webhook → terminal-failed state.
+    s = h.webhook("sandbox", {"orderRef": rcref, "pspRef": f"psp-fail-{rcref}", "type": "Failed",
+                              "amountMinor": 0, "currency": "NOK"})
+    L.check("recon Failed webhook -> 200", s == 200, f"status={s}")
+    order = h.order_by_ref(rcref)
+    L.check("recon order -> Cancelled(2) after Failed", order["Status"] == h.ORD_CANCELLED, str(order["Status"]))
+    rpay = h.payments_by_ref_prefix(rcref)[0]
+    L.check("recon payment -> Failed(2) after Failed", rpay["Status"] == h.PAY_FAILED, str(rpay["Status"]))
+    sold_f, held_f, _ = h.tt_counters(rga)
+    L.check("recon after Failed: Held=0 Sold=0", held_f == 0 and sold_f == 0, f"sold={sold_f} held={held_f}")
+
+    # Poll reconcile as the OWNER, WITHOUT the sandbox param — the exact ghost-ticket path.
+    r = h.gql("""mutation($ref: String!){ reconcileTicketOrder(reference:$ref){
+                   reference status paymentState totalMinor } }""", {"ref": rcref}, rtok)
+    rec = (r.get("data") or {}).get("reconcileTicketOrder")
+    L.check("recon reconcile -> returns status (no error)", bool(rec), str(r.get("errors") or rec))
+    if rec:
+        L.check("reconcile reports order STILL Cancelled", rec["status"] == "Cancelled", str(rec["status"]))
+        L.check("reconcile reports payment STILL Failed", rec["paymentState"] == "Failed", str(rec["paymentState"]))
+
+    # DB TRUTH after reconcile: nothing resurrected.
+    order = h.order_by_ref(rcref)
+    L.check("recon order STAYS Cancelled(2) after reconcile", order["Status"] == h.ORD_CANCELLED, str(order["Status"]))
+    rpay = h.payments_by_ref_prefix(rcref)[0]
+    L.check("recon payment STAYS Failed(2) after reconcile", rpay["Status"] == h.PAY_FAILED, str(rpay["Status"]))
+    L.check("recon: NO ghost ticket issued", len(h.tickets_for_ref(rcref)) == 0, str(len(h.tickets_for_ref(rcref))))
+    sold_r, held_r, _ = h.tt_counters(rga)
+    L.check("recon counters UNCHANGED by reconcile: Held=0 Sold=0",
+            held_r == 0 and sold_r == 0, f"sold={sold_r} held={held_r}")
+    rholds = h.holds_for_ref(rcref)
+    L.check("recon holds STAY Released(2) after reconcile",
+            all(hh["Status"] == h.HOLD_RELEASED for hh in rholds), str([hh["Status"] for hh in rholds]))
+
     L.done()
 
 

@@ -451,6 +451,116 @@ namespace DJDiP.Tests
             Assert.Single(h.Confirmation.Sent);
         }
 
+        // ---- Fix 2: capture AFTER a hold release must re-reserve inventory or refund -----
+
+        // Reconcile-shaped repro (the live bug): a signed Failed webhook releases the holds and
+        // Cancels the order; THEN a Captured event for the SAME attempt arrives (a stale poll /
+        // late webhook). With the OLD `.Where(Status==Active)` loop the released hold was SKIPPED:
+        // a ticket was issued but QuantitySold was never incremented (ghost ticket). The fix
+        // re-reserves the released hold straight to Sold when capacity allows.
+        [Fact]
+        public async Task Capture_after_failed_release_re_reserves_inventory_and_issues()
+        {
+            using var h = new OrchestratorTestHarness();
+            var (eventId, type) = h.SeedEvent(priceMinor: 50000, capacity: 10);
+            var user = h.SeedUser();
+
+            var created = await h.Orchestrator.CreatePaymentAsync(
+                eventId, Line(type.Id, qty: 2), null, user.Id, null, null, CancellationToken.None);
+            var order = await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Reference == created.Order.Reference);
+
+            // Held after create: 2 reserved, 0 sold.
+            var afterCreate = await h.Db.TicketTypes.AsNoTracking().FirstAsync(t => t.Id == type.Id);
+            Assert.Equal(2, afterCreate.QuantityHeld);
+            Assert.Equal(0, afterCreate.QuantitySold);
+
+            // Signed Failed webhook → holds Released, order Cancelled, payment Failed, Held back to 0.
+            await h.Orchestrator.FinalizeAsync(new PaymentEvent(
+                created.Order.Reference, "psp-fail", PaymentEventType.Failed,
+                Money.Nok(0), DateTime.UtcNow, "{}"), CancellationToken.None);
+
+            var afterFail = await h.Db.TicketTypes.AsNoTracking().FirstAsync(t => t.Id == type.Id);
+            Assert.Equal(0, afterFail.QuantityHeld);
+            Assert.Equal(0, afterFail.QuantitySold);
+            Assert.Equal(OrderStatus.Cancelled, (await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Id == order.Id)).Status);
+            Assert.True((await h.Db.TicketHolds.AsNoTracking().Where(hh => hh.OrderId == order.Id).ToListAsync())
+                .All(hh => hh.Status == TicketHoldStatus.Released));
+
+            // Now a Captured event for the SAME attempt lands (distinct PspRef so layer-0 dedup
+            // lets it through). Capacity is free, so the released hold is re-reserved → committed.
+            await h.Orchestrator.FinalizeAsync(new PaymentEvent(
+                created.Order.Reference, "psp-cap", PaymentEventType.Captured,
+                Money.Nok(50000), DateTime.UtcNow, "{}"), CancellationToken.None);
+
+            // Tickets issued (one per unit) AND QuantitySold incremented AND holds Committed.
+            Assert.Equal(2, await h.Db.Tickets.AsNoTracking().CountAsync(t => t.UserId == user.Id));
+            var afterCap = await h.Db.TicketTypes.AsNoTracking().FirstAsync(t => t.Id == type.Id);
+            Assert.Equal(2, afterCap.QuantitySold);
+            Assert.Equal(0, afterCap.QuantityHeld);
+            Assert.True((await h.Db.TicketHolds.AsNoTracking().Where(hh => hh.OrderId == order.Id).ToListAsync())
+                .All(hh => hh.Status == TicketHoldStatus.Committed));
+
+            var payment = await h.Db.Payments.AsNoTracking().FirstAsync(p => p.OrderId == order.Id);
+            Assert.Equal(PaymentStatus.Captured, payment.Status);
+            Assert.Equal(OrderStatus.Fulfilled, (await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Id == order.Id)).Status);
+            // No refund: this is the happy re-reserve, money is kept.
+            Assert.Empty(h.Provider.Refunds);
+        }
+
+        // Capture after release when the tier was SOLD OUT by someone else meanwhile: the
+        // re-reserve CAS affects 0 rows → DO NOT issue. Roll back, mark the payment Captured
+        // (money WAS taken), best-effort auto-refund with the "-oversold-refund" idemKey, and
+        // Cancel the order. (Also the real prod Vipps race: sweeper expired the hold at 10:00,
+        // captured.v1 arrived 10:01, and the freed seats were grabbed in between.)
+        [Fact]
+        public async Task Capture_after_release_when_sold_out_does_not_issue_and_refunds()
+        {
+            using var h = new OrchestratorTestHarness();
+            var (eventId, type) = h.SeedEvent(priceMinor: 50000, capacity: 2);
+            var user = h.SeedUser();
+
+            var created = await h.Orchestrator.CreatePaymentAsync(
+                eventId, Line(type.Id, qty: 2), null, user.Id, null, null, CancellationToken.None);
+            var order = await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Reference == created.Order.Reference);
+
+            // Release this order's holds (Failed webhook) → capacity 2 frees up.
+            await h.Orchestrator.FinalizeAsync(new PaymentEvent(
+                created.Order.Reference, "psp-fail", PaymentEventType.Failed,
+                Money.Nok(0), DateTime.UtcNow, "{}"), CancellationToken.None);
+
+            // Someone else buys out the whole tier meanwhile (Sold == Capacity == 2). Now there
+            // is NO room to re-reserve this order's released hold.
+            await h.Db.Database.ExecuteSqlInterpolatedAsync(
+                $@"UPDATE ""TicketTypes"" SET ""QuantitySold"" = 2 WHERE ""Id"" = {type.Id}");
+
+            // The late Captured event lands for the same attempt.
+            await h.Orchestrator.FinalizeAsync(new PaymentEvent(
+                created.Order.Reference, "psp-cap", PaymentEventType.Captured,
+                Money.Nok(50000), DateTime.UtcNow, "{}"), CancellationToken.None);
+
+            // NO tickets issued.
+            Assert.Equal(0, await h.Db.Tickets.AsNoTracking().CountAsync(t => t.UserId == user.Id));
+            // Inventory untouched by us — still 2 sold (the other buyer's), 0 held.
+            var tt = await h.Db.TicketTypes.AsNoTracking().FirstAsync(t => t.Id == type.Id);
+            Assert.Equal(2, tt.QuantitySold);
+            Assert.Equal(0, tt.QuantityHeld);
+
+            // Payment recorded Captured (money WAS taken); order Cancelled (this order is dead).
+            var payment = await h.Db.Payments.AsNoTracking().FirstAsync(p => p.OrderId == order.Id);
+            Assert.Equal(PaymentStatus.Captured, payment.Status);
+            Assert.Equal(50000, payment.CapturedAmountMinor);
+            Assert.Equal(OrderStatus.Cancelled, (await h.Db.Orders.AsNoTracking().FirstAsync(o => o.Id == order.Id)).Status);
+
+            // Auto-refund attempted with the deterministic "-oversold-refund" idemKey.
+            Assert.Single(h.Provider.Refunds);
+            Assert.Equal(created.Order.Reference, h.Provider.Refunds[0].Ref);
+            Assert.Equal(created.Order.Reference + "-oversold-refund", h.Provider.Refunds[0].IdemKey);
+            Assert.Equal(50000, h.Provider.Refunds[0].Amount.AmountMinor);
+
+            // No confirmation email (nothing was fulfilled).
+            Assert.Empty(h.Confirmation.Sent);
+        }
+
         // ---- release path (promo reservation released on expiry) --------------------
 
         [Fact]
