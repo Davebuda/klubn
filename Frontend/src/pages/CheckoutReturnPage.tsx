@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client';
-import { CheckCircle, Clock, AlertCircle, Ticket } from 'lucide-react';
-import { GET_TICKET_ORDER, COMPLETE_SANDBOX_PAYMENT, RECONCILE_TICKET_ORDER } from '../graphql/ticketing';
+import { CheckCircle, Clock, AlertCircle, Ticket, XCircle } from 'lucide-react';
+import {
+  GET_TICKET_ORDER,
+  COMPLETE_SANDBOX_PAYMENT,
+  RECONCILE_TICKET_ORDER,
+  RETRY_TICKET_ORDER_PAYMENT,
+} from '../graphql/ticketing';
+import type { RetryTicketOrderData, RetryTicketOrderVars } from '../graphql/ticketing';
 import { formatMinor } from '../utils/money';
 import PageSeo from '../components/common/PageSeo';
 
@@ -17,6 +23,17 @@ type OrderStatus = {
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLLS = 15;
 
+// Provider-side terminal-failure payment states + order statuses. When the order lands in
+// one of these, polling is pointless — the buyer needs a "Try again" path, not a spinner.
+const FAILED_PAYMENT_STATES = ['Failed', 'Aborted', 'Expired', 'Terminated', 'Cancelled'];
+const FAILED_ORDER_STATUSES = ['Cancelled', 'Expired'];
+
+const PROVIDER_LABELS: Record<string, string> = {
+  Vipps: 'Vipps',
+  Stripe: 'Card',
+  Sandbox: 'Sandbox (dev)',
+};
+
 const CheckoutReturnPage = () => {
   const [searchParams] = useSearchParams();
   const reference = searchParams.get('reference') ?? '';
@@ -27,10 +44,19 @@ const CheckoutReturnPage = () => {
   const [pollCount, setPollCount] = useState(0);
   const [sandboxDone, setSandboxDone] = useState(false);
   const [sandboxError, setSandboxError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  // Providers that were available when this order was created (stashed by EventTicketsPage).
+  // Present only when the buyer originally had >1 choice — drives the retry provider picker.
+  const [retryProviders, setRetryProviders] = useState<string[]>([]);
+  const [retryProvider, setRetryProvider] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [completeSandbox] = useMutation(COMPLETE_SANDBOX_PAYMENT);
   const [reconcileOrder] = useMutation(RECONCILE_TICKET_ORDER);
+  const [retryPayment] = useMutation<RetryTicketOrderData, RetryTicketOrderVars>(
+    RETRY_TICKET_ORDER_PAYMENT
+  );
 
   const { data, loading, error, refetch } = useQuery(GET_TICKET_ORDER, {
     variables: { reference },
@@ -41,10 +67,53 @@ const CheckoutReturnPage = () => {
   const order: OrderStatus | undefined = data?.ticketOrder;
   // Backend values: paymentState Created→Authorized→Captured; order status
   // Pending→Reserved→Paid→Fulfilled (tickets issued on Captured/Fulfilled).
+  // Zero-total (100% promo / free) orders land already Captured — the success path renders
+  // kr 0,00, which is correct.
   const isPaid =
     order?.paymentState === 'Captured' ||
     order?.status === 'Fulfilled' ||
     order?.status === 'Paid';
+
+  // Terminal failure: the provider reported the payment didn't complete. Only meaningful
+  // once we have an order AND it isn't paid — never shadow a success.
+  const isFailed =
+    !isPaid &&
+    !!order &&
+    (FAILED_PAYMENT_STATES.includes(order.paymentState) ||
+      FAILED_ORDER_STATUSES.includes(order.status));
+
+  // Recover the create-time provider choice for retry (best-effort; absent ⇒ default only).
+  useEffect(() => {
+    if (!reference) return;
+    try {
+      const raw = sessionStorage.getItem(`checkout:providers:${reference}`);
+      if (raw) {
+        const list = JSON.parse(raw) as string[];
+        if (Array.isArray(list) && list.length > 1) {
+          setRetryProviders(list);
+          setRetryProvider(list[0]);
+        }
+      }
+    } catch {
+      // ignore — retry falls back to the backend default provider.
+    }
+  }, [reference]);
+
+  const handleRetry = async () => {
+    setRetryError(null);
+    setRetrying(true);
+    try {
+      const { data: retryData } = await retryPayment({
+        variables: { reference, provider: retryProvider || undefined },
+      });
+      const redirectUrl = retryData?.retryTicketOrderPayment?.redirectUrl;
+      if (!redirectUrl) throw new Error('No redirect URL returned from server.');
+      window.location.href = redirectUrl;
+    } catch (err) {
+      setRetryError(err instanceof Error ? err.message : 'Couldn’t start a new payment. Please try again.');
+      setRetrying(false);
+    }
+  };
 
   // Sandbox (dev): auto-call completeSandboxPayment once, then start polling.
   useEffect(() => {
@@ -70,7 +139,9 @@ const CheckoutReturnPage = () => {
   // so calling it on every tick is safe — it captures once the user has approved
   // in the Vipps app, and is a no-op while the payment is still pending.
   useEffect(() => {
-    if (isPaid || !reference) return;
+    // Stop polling on success OR terminal failure — a failed order won't self-recover, and
+    // the UI now offers an explicit retry instead.
+    if (isPaid || isFailed || !reference) return;
 
     const tick = async () => {
       if (!isSandbox) {
@@ -100,7 +171,7 @@ const CheckoutReturnPage = () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPaid, reference, isSandbox]);
+  }, [isPaid, isFailed, reference, isSandbox]);
 
   // ── Missing reference ────────────────────────────────────────────────────
   if (!reference) {
@@ -217,6 +288,94 @@ const CheckoutReturnPage = () => {
                 Dev note: {sandboxError}
               </p>
             )}
+          </div>
+        ) : isFailed ? (
+          /* ── Payment failed / cancelled / expired ── */
+          <div className="space-y-6 text-center">
+            <div className="w-20 h-20 rounded-full bg-red-500/15 border border-red-500/30 flex items-center justify-center mx-auto">
+              <XCircle className="w-10 h-10 text-red-400" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="font-display text-3xl sm:text-4xl font-black tracking-tight">
+                Payment didn’t complete
+              </h1>
+              <p className="text-gray-400 text-base">
+                Your card or wallet wasn’t charged. You can try again — your selection is still held.
+              </p>
+            </div>
+
+            {order && (
+              <div className="rounded-[24px] border border-white/10 bg-white/[0.04] p-4 text-sm text-left space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Reference</span>
+                  <span className="font-mono text-white">{order.reference}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Payment state</span>
+                  <span className="text-red-300">{order.paymentState}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Retry provider picker — only when the buyer originally had a real choice. */}
+            {retryProviders.length > 1 && (
+              <fieldset className="space-y-2 text-left">
+                <legend className="text-xs uppercase tracking-[0.3em] text-gray-400 font-semibold mb-1">
+                  Betal med / Pay with
+                </legend>
+                <div className="grid grid-cols-2 gap-2">
+                  {retryProviders.map((p) => {
+                    const active = retryProvider === p;
+                    const isVipps = p === 'Vipps';
+                    return (
+                      <label
+                        key={p}
+                        className={`cursor-pointer rounded-xl border px-3 py-2.5 text-sm font-semibold text-center transition-all ${
+                          active
+                            ? isVipps
+                              ? 'border-[#FF5B24]/70 bg-[#FF5B24]/15 text-[#FF8A5B]'
+                              : 'border-white/40 bg-white/10 text-white'
+                            : 'border-white/15 bg-white/[0.04] text-gray-300 hover:border-white/30'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="retry-provider"
+                          value={p}
+                          checked={active}
+                          onChange={() => setRetryProvider(p)}
+                          className="sr-only"
+                        />
+                        {PROVIDER_LABELS[p] ?? p}
+                      </label>
+                    );
+                  })}
+                </div>
+              </fieldset>
+            )}
+
+            {retryError && (
+              <p className="text-sm text-red-300 bg-red-500/10 rounded-xl px-4 py-3 border border-red-500/30">
+                {retryError}
+              </p>
+            )}
+
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                type="button"
+                onClick={handleRetry}
+                disabled={retrying}
+                className="px-6 py-3 rounded-full bg-gradient-to-r from-orange-400 to-[#FF6B35] text-black text-sm font-bold hover:from-orange-300 hover:to-orange-400 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                {retrying ? 'Starting…' : 'Try again'}
+              </button>
+              <Link
+                to="/events"
+                className="px-6 py-3 rounded-full border border-white/15 bg-white/[0.04] text-white text-sm font-semibold hover:border-orange-400/40 transition"
+              >
+                Browse Events
+              </Link>
+            </div>
           </div>
         ) : pollCount >= MAX_POLLS ? (
           /* ── Timeout / still pending ── */
