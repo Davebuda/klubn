@@ -29,6 +29,7 @@ import { useDebounce } from '../hooks/useDebounce';
 import { useAuth } from '../context/AuthContext';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 import PageSeo from '../components/common/PageSeo';
+import VippsIcon from '../components/common/VippsIcon';
 import { ScrollReveal } from '../components/effects/ScrollReveal';
 
 // Human label for a provider key. Vipps gets brand orange; everything else neutral.
@@ -728,7 +729,10 @@ const EventTicketsPage = () => {
                               onChange={() => setSelectedProvider(p)}
                               className="sr-only"
                             />
-                            {PROVIDER_LABELS[p] ?? p}
+                            <span className="inline-flex items-center justify-center gap-1.5">
+                              {isVipps && <VippsIcon className="h-4 w-4 rounded-[3px]" />}
+                              {PROVIDER_LABELS[p] ?? p}
+                            </span>
                           </label>
                         );
                       })}
@@ -782,7 +786,13 @@ const EventTicketsPage = () => {
                     : 'Continue to payment'}
                 </button>
 
-                <p className="text-center text-[10px] text-gray-600">
+                {/* Quiet trust row: official Vipps icon (icon only, per brand owner) —
+                    shown only when Vipps is genuinely available for this order
+                    (quote-driven), so we never advertise a provider the buyer can't use. */}
+                <p className="flex items-center justify-center gap-1.5 text-center text-[10px] text-gray-600">
+                  {availableProviders.includes('Vipps') && (
+                    <VippsIcon className="h-3.5 w-3.5 rounded-[3px]" />
+                  )}
                   Secure checkout · No card details shared with KlubN
                 </p>
               </div>

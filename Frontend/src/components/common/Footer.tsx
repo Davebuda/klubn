@@ -1,5 +1,6 @@
 import { useSiteSettings } from '../../context/SiteSettingsContext';
 import { isRealSocialUrl } from '../../utils/social';
+import VippsIcon from './VippsIcon';
 
 const Footer = () => {
   const { siteSettings } = useSiteSettings();
@@ -83,6 +84,16 @@ const Footer = () => {
       </div>
 
       <div className="mt-10 border-t border-white/5 pt-6 text-center text-xs text-gray-500 space-y-3">
+        {/* Payment acceptance row — official Vipps icon only (per brand owner:
+            icon, never a redrawn wordmark); card schemes as plain text since we
+            hold no licensed card artwork. */}
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-gray-500">
+          <VippsIcon className="h-5 w-5 rounded-[4px]" />
+          <span aria-hidden="true">·</span>
+          <span className="tracking-wide">Visa</span>
+          <span aria-hidden="true">·</span>
+          <span className="tracking-wide">Mastercard</span>
+        </div>
         <p className="text-gray-500">
           DJ DIP AV BUKENYA · Org. nr 933 809 048 · St. Edmunds Vei 39D, 0280 Oslo, Norway ·{' '}
           <a href="mailto:tickets@klubn.no" className="hover:text-white transition">tickets@klubn.no</a> · +47 967 36 112
