@@ -19,6 +19,12 @@ namespace DJDiP.Application.DTO.PaymentDTO
         public int Available { get; set; }
         public string Status { get; set; } = string.Empty;
         public int SortOrder { get; set; }
+
+        // True only for a hidden tier surfaced via an unlockCode (hidden-tier reveal,
+        // design §3.2). Public tiers are always false. The FE uses this to render the
+        // "Unlocked" marker; it carries no purchasability meaning of its own (the tier
+        // is OnSale and quotable exactly when the same code is applied at quote/create).
+        public bool IsUnlocked { get; set; }
     }
 
     // ----- createTicketOrder input -----

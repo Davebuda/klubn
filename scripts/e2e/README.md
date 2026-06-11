@@ -18,6 +18,7 @@ Standard library only (Python 3.9+): `urllib` + `sqlite3`. No pip installs.
 | `checkout_exactly_once.py` | Webhook + reconcile-poll fired back-to-back (and reversed) issue **exactly one** ticket set / one Captured payment; bad signature → 401 + no state change; replay → 200 no-op. |
 | `checkout_retry.py` | Multi-attempt: Failed webhook releases holds + promo + cancels order; retry creates `AttemptNo=2` `{ref}-r2`, re-reserves; attempt-2 capture issues once; retry-on-paid rejected. Plus **zero-total** (100% promo) issues immediately with a return-page redirect and a Captured-0 payment. |
 | `checkout_hostile.py` | Oversell / expired-promo / hidden-tier-without-unlock / unknown-provider / wrong-owner-retry all fail cleanly and leave **no partial state**; 5 quotes write nothing. |
+| `checkout_hidden_reveal.py` | Hidden-tier reveal via `ticketTypes(unlockCode)`: no/bogus/non-unlock code excludes the hidden tier (anti-oracle, no error), a valid `UnlocksHiddenTypes` code reveals it with `isUnlocked=true`, the reveal reads write **zero Orders**, and the revealed tier flows quote → create → signed-webhook capture → one issued ticket. |
 
 All scripts share `_harness.py` (config, `gql()`/`rest()`/`webhook()`/`sign()`/`db()`,
 a PASS/FAIL `Ledger`, and `seed_ticket_type()` / `seed_promo()` fixtures). Each prints a
@@ -61,6 +62,7 @@ python checkout_promo_flow.py
 python checkout_exactly_once.py
 python checkout_retry.py
 python checkout_hostile.py
+python checkout_hidden_reveal.py
 ```
 
 Run them in any order; each is standalone and self-seeding.

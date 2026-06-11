@@ -499,9 +499,18 @@ public class Query
     // ===== Ticketing — provider-agnostic checkout reads (design §6) =====
 
     // Live ticket tiers for an event (drafts hidden). Available is computed, never stored.
+    //
+    // Optional `unlockCode` (hidden-tier reveal — design §3.2): when supplied and the code is a
+    // valid, active, in-window, in-scope UnlocksHiddenTypes promo, the hidden OnSale tiers it
+    // unlocks are appended to the public list (rendered with an "Unlocked" marker by the FE).
+    // Any invalid code reveals NOTHING and surfaces no error — indistinguishable from passing
+    // no code (anti-oracle). The reveal is a pure read; it reserves/redeems nothing. Guid args
+    // are UUID! and unlockCode is a nullable String.
     public async Task<IReadOnlyList<DJDiP.Application.DTO.PaymentDTO.TicketTypeAvailabilityDto>> TicketTypes(
         Guid eventId,
-        [Service] AppDbContext db)
+        [Service] AppDbContext db,
+        [Service] DJDiP.Application.Interfaces.IPromoCodeService promoCodes,
+        string? unlockCode = null)
     {
         var types = await db.TicketTypes
             // Public read: drafts AND hidden tiers (design §3.2 — visible only via an
@@ -510,21 +519,38 @@ public class Query
             .OrderBy(t => t.SortOrder)
             .ToListAsync();
 
-        return types.Select(t => new DJDiP.Application.DTO.PaymentDTO.TicketTypeAvailabilityDto
+        // Reveal: append the hidden OnSale tiers this code unlocks (empty when the code is
+        // missing/invalid). Dedup by Id so a code can never double-list a tier.
+        if (!string.IsNullOrWhiteSpace(unlockCode))
         {
-            Id = t.Id,
-            Name = t.Name,
-            Description = t.Description,
-            PriceMinor = t.PriceMinor,
-            VatRate = t.VATRate,
-            Currency = t.Currency,
-            AdmitCount = t.AdmitCount,
-            MinPerOrder = t.MinPerOrder,
-            MaxPerOrder = t.MaxPerOrder,
-            Available = Math.Max(0, t.Capacity - t.QuantitySold - t.QuantityHeld),
-            Status = t.Status.ToString(),
-            SortOrder = t.SortOrder
-        }).ToList();
+            var revealed = await promoCodes.ResolveHiddenUnlockAsync(unlockCode, eventId, default);
+            if (revealed.Count > 0)
+            {
+                var known = types.Select(t => t.Id).ToHashSet();
+                types.AddRange(revealed.Where(r => known.Add(r.Id)));
+            }
+        }
+
+        return types
+            .OrderBy(t => t.SortOrder)
+            .Select(t => new DJDiP.Application.DTO.PaymentDTO.TicketTypeAvailabilityDto
+            {
+                Id = t.Id,
+                Name = t.Name,
+                Description = t.Description,
+                PriceMinor = t.PriceMinor,
+                VatRate = t.VATRate,
+                Currency = t.Currency,
+                AdmitCount = t.AdmitCount,
+                MinPerOrder = t.MinPerOrder,
+                MaxPerOrder = t.MaxPerOrder,
+                Available = Math.Max(0, t.Capacity - t.QuantitySold - t.QuantityHeld),
+                Status = t.Status.ToString(),
+                SortOrder = t.SortOrder,
+                // Only a hidden tier can be in this list, and it's here ONLY because the
+                // unlockCode revealed it — so IsHidden is exactly "was unlocked".
+                IsUnlocked = t.IsHidden
+            }).ToList();
     }
 
     // quoteTicketOrder (C5; design §4.2/§5): stateless, side-effect-free price of a

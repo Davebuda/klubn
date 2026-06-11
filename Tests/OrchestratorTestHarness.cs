@@ -217,6 +217,11 @@ namespace DJDiP.Tests
             if (Responder is not null) return Task.FromResult(Responder(code, eventId, lines, userId));
             return Task.FromResult(Result ?? PromoValidationResult.Fail(code, "This code isn't valid."));
         }
+
+        // Reveal is a separate read path the orchestrator never invokes — default to nothing.
+        public Task<IReadOnlyList<TicketType>> ResolveHiddenUnlockAsync(
+            string? code, Guid eventId, CancellationToken ct)
+            => Task.FromResult((IReadOnlyList<TicketType>)Array.Empty<TicketType>());
     }
 
     // Records confirmation sends so a test can assert the post-commit email fired exactly once.

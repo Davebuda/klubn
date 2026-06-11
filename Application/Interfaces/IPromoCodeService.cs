@@ -1,4 +1,5 @@
 using DJDiP.Application.DTO.PaymentDTO;
+using DJDiP.Domain.Models;
 
 namespace DJDiP.Application.Interfaces
 {
@@ -17,6 +18,21 @@ namespace DJDiP.Application.Interfaces
             Guid eventId,
             IReadOnlyList<PromoLine> lines,
             string? userId,
+            CancellationToken ct);
+
+        // Hidden-tier reveal (checkout-orchestration design §3.2). PURE READ — resolves the
+        // hidden OnSale tiers a code unlocks for an event so the public ticketTypes query can
+        // surface a tier the buyer can't otherwise see. Reserves/redeems NOTHING. Applies the
+        // SAME visibility-relevant rules as ValidateAsync (normalize, IsActive, validity
+        // window, event scope, global usage cap) and requires UnlocksHiddenTypes==true. On ANY
+        // failure — unknown/expired/inactive code, wrong event, usage exhausted, not an unlock
+        // code — returns an EMPTY list, indistinguishable from passing no code (anti-oracle:
+        // never leak why a code didn't reveal a tier). The promo's TicketTypes scope restricts
+        // which hidden tiers reveal; an empty scope + UnlocksHiddenTypes reveals all hidden
+        // OnSale tiers of the event.
+        Task<IReadOnlyList<TicketType>> ResolveHiddenUnlockAsync(
+            string? code,
+            Guid eventId,
             CancellationToken ct);
     }
 }

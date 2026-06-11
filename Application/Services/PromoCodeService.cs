@@ -115,5 +115,52 @@ namespace DJDiP.Application.Services
                 UnlockedTicketTypeIds = unlocked
             };
         }
+
+        public async Task<IReadOnlyList<TicketType>> ResolveHiddenUnlockAsync(
+            string? code, Guid eventId, CancellationToken ct)
+        {
+            // Empty result is the universal "nothing to reveal" answer — it is what an unknown
+            // code, an expired code, a non-unlock code, and an out-of-scope code all return, so
+            // the FE can never tell a real-but-irrelevant code from a bogus one (anti-oracle).
+            var empty = (IReadOnlyList<TicketType>)Array.Empty<TicketType>();
+
+            var normalized = (code ?? string.Empty).Trim().ToUpperInvariant();
+            if (normalized.Length == 0)
+                return empty;
+
+            var promo = await _unitOfWork.PromotionCodes.GetByCodeWithTypesAsync(normalized, ct);
+            if (promo is null)
+                return empty;
+
+            // Same visibility-relevant gates as ValidateAsync. Per-user caps are intentionally
+            // NOT applied here: this is an anonymous-friendly visibility read (no userId), and a
+            // per-user-exhausted code is still re-checked and rejected at quote/create — so
+            // revealing the tier here never lets a user actually over-redeem.
+            if (!promo.IsActive)
+                return empty;
+            if (!promo.UnlocksHiddenTypes)
+                return empty;
+
+            var now = DateTime.UtcNow;
+            if (promo.ValidFrom.HasValue && now < promo.ValidFrom.Value)
+                return empty;
+            if (now > promo.ValidUntil)
+                return empty;
+
+            // EventId scope: null = valid for any event.
+            if (promo.EventId.HasValue && promo.EventId.Value != eventId)
+                return empty;
+
+            // Global usage cap (advisory read; the atomic CAS is in the orchestrator).
+            if (promo.MaxRedemptions.HasValue && promo.UsageCount >= promo.MaxRedemptions.Value)
+                return empty;
+
+            // Type scope: empty list = unlock ALL hidden OnSale tiers of the event (wildcard);
+            // otherwise only the listed tiers reveal.
+            var scopedTypeIds = promo.TicketTypes.Select(t => t.TicketTypeId).ToList();
+
+            return await _unitOfWork.TicketTypes.GetHiddenOnSaleByEventAsync(
+                eventId, scopedTypeIds, ct);
+        }
     }
 }

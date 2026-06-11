@@ -22,6 +22,11 @@ namespace DJDiP.Tests
             public Task<PromoValidationResult> ValidateAsync(
                 string code, Guid eventId, IReadOnlyList<PromoLine> lines, string? userId, CancellationToken ct)
                 => Task.FromResult(_result);
+
+            // Not exercised by the quote tests (the quote service never calls reveal).
+            public Task<IReadOnlyList<TicketType>> ResolveHiddenUnlockAsync(
+                string? code, Guid eventId, CancellationToken ct)
+                => Task.FromResult((IReadOnlyList<TicketType>)Array.Empty<TicketType>());
         }
 
         private static TicketType Type(Guid id, bool hidden = false, long price = 10000,

@@ -57,6 +57,17 @@ namespace DJDiP.Tests
             return Task.FromResult(result);
         }
 
+        public Task<IReadOnlyList<TicketType>> GetHiddenOnSaleByEventAsync(
+            Guid eventId, IReadOnlyCollection<Guid>? restrictToTypeIds, CancellationToken ct)
+        {
+            IReadOnlyList<TicketType> result = _byId.Values
+                .Where(t => t.EventId == eventId && t.IsHidden && t.Status == TicketTypeStatus.OnSale)
+                .Where(t => restrictToTypeIds is not { Count: > 0 } || restrictToTypeIds.Contains(t.Id))
+                .OrderBy(t => t.SortOrder)
+                .ToList();
+            return Task.FromResult(result);
+        }
+
         // Unused IRepository surface.
         public Task<TicketType?> GetByIdAsync(object id) => throw new NotSupportedException();
         public Task<IEnumerable<TicketType>> GetAllAsync() => throw new NotSupportedException();

@@ -14,5 +14,12 @@ namespace DJDiP.Application.Interfaces
         // to surface "not found for this event"). No tracking — read-only snapshot.
         Task<IReadOnlyDictionary<Guid, TicketType>> GetByEventAndIdsAsync(
             Guid eventId, IReadOnlyList<Guid> typeIds, CancellationToken ct);
+
+        // Hidden OnSale tiers for an event (hidden-tier reveal — checkout-orchestration
+        // design §3.2). When `restrictToTypeIds` is non-empty, only those listed tiers are
+        // returned (mirrors a promo's TicketTypes scope); when null/empty, every hidden
+        // OnSale tier of the event is returned (wildcard unlock). No tracking — read-only.
+        Task<IReadOnlyList<TicketType>> GetHiddenOnSaleByEventAsync(
+            Guid eventId, IReadOnlyCollection<Guid>? restrictToTypeIds, CancellationToken ct);
     }
 }

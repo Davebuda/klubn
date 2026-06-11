@@ -13,6 +13,7 @@ import {
   X,
   Check,
   RefreshCw,
+  Sparkles,
 } from 'lucide-react';
 import { GET_EVENT_BY_ID } from '../graphql/queries';
 import {
@@ -54,6 +55,7 @@ interface TicketTypeAvailability {
   available: number;
   status: string;
   sortOrder: number;
+  isUnlocked: boolean;
 }
 
 interface OrderLineSummary {
@@ -157,6 +159,12 @@ const TicketTypeCard = ({ tier, qty, onQtyChange }: TicketTypeCardProps) => {
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-center gap-2 flex-wrap">
           <h3 className="text-base font-bold text-white">{tier.name}</h3>
+          {tier.isUnlocked && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-400/15 border border-violet-400/30 text-violet-300 text-[10px] font-bold uppercase tracking-wider">
+              <Sparkles className="w-2.5 h-2.5" />
+              Unlocked
+            </span>
+          )}
           {tier.admitCount > 1 && (
             <span className="px-2 py-0.5 rounded-full bg-orange-400/15 border border-orange-400/25 text-orange-300 text-[10px] font-bold uppercase tracking-wider">
               Admits {tier.admitCount}
@@ -225,8 +233,11 @@ const EventTicketsPage = () => {
     skip: !id,
   });
 
+  // unlockCode is the applied promo: Apollo refetches automatically when the variable
+  // changes, so applying a code reveals its hidden tiers and clearing it hides them again.
+  // An invalid code simply returns the public list (the server reveals nothing) — no error.
   const { data: tiersData, loading: tiersLoading } = useQuery(GET_TICKET_TYPES, {
-    variables: { eventId: id },
+    variables: { eventId: id, unlockCode: appliedPromo || null },
     skip: !id,
   });
 
@@ -234,20 +245,29 @@ const EventTicketsPage = () => {
 
   const event = eventData?.event;
 
-  // Only show OnSale tiers, sorted by sortOrder.
-  // TODO(checkout-fe): hidden-tier reveal is BACKEND-GATED and deliberately out of scope
-  // for this slice. A promo with UnlocksHiddenTypes=true discounts/unlocks a hidden tier
-  // server-side, but GET_TICKET_TYPES never returns IsHidden tiers and the CheckoutQuote
-  // DTO exposes no UnlockedTicketTypeIds — so the FE can't surface a tier the user can't
-  // see. Revealing them needs a small backend read addition, e.g. ticketTypes(eventId,
-  // unlockCode), that returns hidden tiers when the code unlocks them. Do NOT hack this
-  // client-side. Until then: promo discounts on VISIBLE tiers work end-to-end.
+  // Only show OnSale tiers, sorted by sortOrder. Hidden tiers are revealed server-side when
+  // the applied promo unlocks them (the query carries unlockCode=appliedPromo); revealed
+  // tiers arrive with isUnlocked=true and render an "Unlocked" marker.
   const visibleTiers: TicketTypeAvailability[] = useMemo(() => {
     if (!tiersData?.ticketTypes) return [];
     return [...tiersData.ticketTypes]
       .filter((t: TicketTypeAvailability) => t.status === 'OnSale')
       .sort((a: TicketTypeAvailability, b: TicketTypeAvailability) => a.sortOrder - b.sortOrder);
   }, [tiersData]);
+
+  // Drop selected-quantity state for any tier that is no longer visible (e.g. a hidden tier
+  // that was revealed, had a quantity chosen, then hidden again when the promo was cleared).
+  // Without this, a quantity would linger as a ghost line in the cart key / quote.
+  useEffect(() => {
+    const visibleIds = new Set(visibleTiers.map((t) => t.id));
+    setQuantities((prev) => {
+      const stale = Object.keys(prev).filter((tid) => prev[tid] > 0 && !visibleIds.has(tid));
+      if (stale.length === 0) return prev;
+      const next = { ...prev };
+      for (const tid of stale) delete next[tid];
+      return next;
+    });
+  }, [visibleTiers]);
 
   const allSoldOut = visibleTiers.length > 0 && visibleTiers.every((t) => t.available === 0);
 

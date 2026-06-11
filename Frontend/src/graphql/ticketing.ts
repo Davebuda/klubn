@@ -2,9 +2,13 @@ import { gql } from '@apollo/client';
 
 // ─── Queries ────────────────────────────────────────────────────────────────
 
+// $unlockCode (nullable) reveals hidden tiers a promo with UnlocksHiddenTypes unlocks
+// (design §3.2). Omitted/invalid => the public list only, no error — indistinguishable
+// from passing no code (anti-oracle). Revealed tiers carry isUnlocked=true for the FE
+// marker. Guid args are UUID! (never ID!).
 export const GET_TICKET_TYPES = gql`
-  query GetTicketTypes($eventId: UUID!) {
-    ticketTypes(eventId: $eventId) {
+  query GetTicketTypes($eventId: UUID!, $unlockCode: String) {
+    ticketTypes(eventId: $eventId, unlockCode: $unlockCode) {
       id
       name
       description
@@ -17,6 +21,7 @@ export const GET_TICKET_TYPES = gql`
       available
       status
       sortOrder
+      isUnlocked
     }
   }
 `;
