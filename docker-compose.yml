@@ -85,6 +85,9 @@ services:
       # Ticketing / payments runtime (P4-P9). The backend FAILS FAST at startup when
       # Payments__Provider=Vipps and any of the 4 Vipps creds above is missing.
       Payments__Provider: ${PAYMENTS_PROVIDER:-Sandbox}
+      # CSV of enabled providers (C11 multi-provider). Unset = [PAYMENTS_PROVIDER] only.
+      # Example: PAYMENTS_PROVIDERS=Vipps,Stripe  (dual-provider prod rollout)
+      Payments__Providers: ${PAYMENTS_PROVIDERS:-}
       # REQUIRED: HMAC key for ticket QR tokens. Generate once (openssl rand -base64 48)
       # and NEVER rotate casually - changing it invalidates every issued ticket's QR.
       Qr__SigningSecret: ${QR_SIGNING_SECRET:?Set QR_SIGNING_SECRET in .env (rotating it invalidates all issued ticket QRs)}

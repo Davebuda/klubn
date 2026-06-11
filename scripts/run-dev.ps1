@@ -32,6 +32,7 @@ $keyMap = @{
     "STRIPE_SECRET_KEY"      = "Stripe__SecretKey"
     "STRIPE_WEBHOOK_SECRET"  = "Stripe__WebhookSecret"
     "STRIPE_PUBLISHABLE_KEY" = "Stripe__PublishableKey"
+    "PAYMENTS_PROVIDERS"     = "Payments__Providers"
     "EMAIL_ENABLED"          = "Email__Enabled"
     "EMAIL_SMTP_HOST"        = "Email__SmtpHost"
     "EMAIL_SMTP_PORT"        = "Email__SmtpPort"
@@ -65,6 +66,11 @@ foreach ($line in Get-Content $envFile) {
 
 if ($Provider -ne "") {
     [Environment]::SetEnvironmentVariable("Payments__Provider", $Provider, "Process")
+    # When forcing Sandbox, also constrain the enabled-set so no real provider can slip
+    # through even if PAYMENTS_PROVIDERS is set in .env.
+    if ($Provider -eq "Sandbox") {
+        [Environment]::SetEnvironmentVariable("Payments__Providers", "Sandbox", "Process")
+    }
 }
 
 $active = [Environment]::GetEnvironmentVariable("Payments__Provider")
