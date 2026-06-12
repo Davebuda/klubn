@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@apollo/client';
 import { GET_PLAYLISTS, GET_DJ_TOP10_LISTS, GET_DJS } from '../graphql/queries';
 import { ScrollReveal } from '../components/effects/ScrollReveal';
+import { safeHttpUrl } from '../lib/safeHttpUrl';
 
 /* ── Types ── */
 type PlaylistSong = {
@@ -163,14 +164,14 @@ const PlaylistCard = ({ playlist, djRating, djReviewCount }: {
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                      {song.spotifyUrl && (
-                        <a href={song.spotifyUrl} target="_blank" rel="noreferrer"
+                      {safeHttpUrl(song.spotifyUrl) && (
+                        <a href={safeHttpUrl(song.spotifyUrl)} target="_blank" rel="noreferrer"
                           className="px-2 py-0.5 rounded-full bg-[#1DB954]/10 border border-[#1DB954]/20 text-[#1DB954] text-[0.55rem] font-bold uppercase tracking-wider hover:bg-[#1DB954]/20 transition">
                           Spotify
                         </a>
                       )}
-                      {song.soundCloudUrl && (
-                        <a href={song.soundCloudUrl} target="_blank" rel="noreferrer"
+                      {safeHttpUrl(song.soundCloudUrl) && (
+                        <a href={safeHttpUrl(song.soundCloudUrl)} target="_blank" rel="noreferrer"
                           className="px-2 py-0.5 rounded-full bg-[#FF5500]/10 border border-[#FF5500]/20 text-[#FF5500] text-[0.55rem] font-bold uppercase tracking-wider hover:bg-[#FF5500]/20 transition">
                           SC
                         </a>
@@ -240,14 +241,14 @@ const DJTopSongs = ({ lists, djMap }: {
                       </div>
                     </div>
                     <div className="flex gap-1.5 shrink-0 ml-2">
-                      {entry.song?.spotifyUrl && (
-                        <a href={entry.song.spotifyUrl} target="_blank" rel="noreferrer"
+                      {safeHttpUrl(entry.song?.spotifyUrl) && (
+                        <a href={safeHttpUrl(entry.song?.spotifyUrl)} target="_blank" rel="noreferrer"
                           className="text-[#1DB954] hover:opacity-70 transition">
                           <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
                         </a>
                       )}
-                      {entry.song?.soundCloudUrl && (
-                        <a href={entry.song.soundCloudUrl} target="_blank" rel="noreferrer"
+                      {safeHttpUrl(entry.song?.soundCloudUrl) && (
+                        <a href={safeHttpUrl(entry.song?.soundCloudUrl)} target="_blank" rel="noreferrer"
                           className="text-[#FF5500] hover:opacity-70 transition">
                           <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 fill-current"><path d="M1.175 12.225c-.051 0-.094.046-.101.1l-.233 2.154.233 2.105c.007.058.05.098.101.098.05 0 .09-.04.099-.098l.255-2.105-.27-2.154c-.009-.06-.05-.1-.1-.1m-.899.828c-.06 0-.091.037-.104.094L0 14.479l.172 1.308c.013.06.045.094.104.094.057 0 .09-.035.104-.094l.2-1.308-.2-1.332c-.015-.057-.047-.094-.104-.094m4.296-1.422c-.27-.087-.556-.135-.854-.135-1.483 0-2.693 1.19-2.726 2.664l-.023 1.258.023 2.699c.005.167.142.3.31.3h3.27c1.318 0 2.386-1.067 2.386-2.386V12.9c0-1.318-1.068-2.386-2.386-2.386"/></svg>
                         </a>

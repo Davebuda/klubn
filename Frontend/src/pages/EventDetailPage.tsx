@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { useQuery } from '@apollo/client';
 import { Link, useParams } from 'react-router-dom';
 import { ExternalLink, MapPin, Clock, Calendar, Users, Music, ChevronLeft } from 'lucide-react';
+import { safeHttpUrl } from '../lib/safeHttpUrl';
 import { GET_EVENT_BY_ID, GET_EVENTS, GET_GENRES, GET_DJS } from '../graphql/queries';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 import PageSeo from '../components/common/PageSeo';
@@ -222,9 +223,9 @@ const EventDetailPage = () => {
 
           {/* CTA row */}
           <div className="flex flex-wrap gap-3 mt-8">
-            {!isPast && event.ticketingUrl ? (
+            {!isPast && safeHttpUrl(event.ticketingUrl) ? (
               <a
-                href={event.ticketingUrl}
+                href={safeHttpUrl(event.ticketingUrl)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 px-8 py-3.5 rounded-full bg-gradient-to-r from-orange-500 to-[#FF6B35] text-white font-bold text-sm tracking-wide hover:shadow-[0_0_30px_rgba(255,107,53,0.5)] hover:scale-[1.02] transition-all"
@@ -414,9 +415,9 @@ const EventDetailPage = () => {
                 )}
 
                 {/* CTA */}
-                {!isPast && event.ticketingUrl ? (
+                {!isPast && safeHttpUrl(event.ticketingUrl) ? (
                   <a
-                    href={event.ticketingUrl}
+                    href={safeHttpUrl(event.ticketingUrl)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="block w-full px-6 py-4 rounded-full bg-gradient-to-r from-orange-400 to-[#FF6B35] text-black text-sm font-bold text-center hover:from-orange-300 hover:to-orange-400 transition-all tracking-wide"

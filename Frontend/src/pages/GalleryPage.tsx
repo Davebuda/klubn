@@ -282,7 +282,7 @@ const UploadMomentModal = ({ onClose, onSuccess }: UploadMomentModalProps) => {
       return;
     }
 
-    const authToken = token || localStorage.getItem('accessToken');
+    const authToken = token; // P0-WS3B — in-memory token, not localStorage
     if (!authToken) {
       setUploadError('You must be logged in to upload. Please sign in again.');
       return;

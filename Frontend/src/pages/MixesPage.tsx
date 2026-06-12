@@ -3,6 +3,7 @@ import { useQuery } from '@apollo/client';
 import { GET_DJ_MIXES } from '../graphql/queries';
 import PageSeo from '../components/common/PageSeo';
 import { ExternalLink, Music, Play } from 'lucide-react';
+import { safeHttpUrl } from '../lib/safeHttpUrl';
 
 type DJMix = {
   id: string;
@@ -155,10 +156,12 @@ const MixesPage = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filtered.map((mix) => (
+            {filtered.map((mix) => {
+              const safeMixUrl = safeHttpUrl(mix.mixUrl);
+              return safeMixUrl ? (
               <a
                 key={mix.id}
-                href={mix.mixUrl}
+                href={safeMixUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group flex flex-col rounded-2xl overflow-hidden border border-white/[0.08] hover:border-orange-400/30 transition-all duration-300 bg-white/[0.02] hover:bg-white/[0.04]"
@@ -225,7 +228,8 @@ const MixesPage = () => {
                   </div>
                 </div>
               </a>
-            ))}
+              ) : null;
+            })}
           </div>
         )}
       </section>

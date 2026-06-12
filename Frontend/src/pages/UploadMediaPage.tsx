@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useMutation, useQuery } from '@apollo/client';
 import { useAuth } from '../context/AuthContext';
+import { getAccessToken } from '../apollo-client';
 import { CREATE_GALLERY_MEDIA, GET_EVENTS } from '../graphql/queries';
 import { Upload, X, Image as ImageIcon, Video, CheckCircle, AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -60,7 +61,7 @@ const UploadMediaPage = () => {
   };
 
   const uploadFile = async (file: File): Promise<string> => {
-    const token = localStorage.getItem('accessToken');
+    const token = getAccessToken(); // P0-WS3B — in-memory token, not localStorage
     if (!token) throw new Error('You must be logged in to upload.');
 
     const formData = new FormData();

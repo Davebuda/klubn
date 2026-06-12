@@ -5,6 +5,7 @@ import {
   APPROVE_ORGANIZER_APPLICATION,
   REJECT_ORGANIZER_APPLICATION,
 } from '../../graphql/queries';
+import { safeHttpUrl } from '../../lib/safeHttpUrl';
 
 const AdminOrganizerApplicationsPage = () => {
   const { data, loading, refetch } = useQuery(GET_ORGANIZER_APPLICATIONS);
@@ -71,8 +72,8 @@ const AdminOrganizerApplicationsPage = () => {
                   </div>
                 </div>
                 <p className="text-sm text-gray-300 leading-relaxed">{app.description}</p>
-                {app.website && (
-                  <a href={app.website} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:underline">
+                {safeHttpUrl(app.website) && (
+                  <a href={safeHttpUrl(app.website)} target="_blank" rel="noreferrer" className="text-xs text-orange-400 hover:underline">
                     {app.website}
                   </a>
                 )}

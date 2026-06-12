@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery } from '@apollo/client';
 import { GET_DJ_MIXES, CREATE_DJ_MIX, UPDATE_DJ_MIX, DELETE_DJ_MIX, GET_DJS } from '../../graphql/queries';
 import { Music, Pencil, Plus, Trash2, ExternalLink } from 'lucide-react';
+import { safeHttpUrl } from '../../lib/safeHttpUrl';
 import ImageUpload from '../../components/common/ImageUpload';
 
 type DJMix = {
@@ -287,14 +288,20 @@ const AdminMixesPage = () => {
 
               {/* Actions */}
               <div className="flex items-center gap-2 flex-shrink-0">
-                <a
-                  href={mix.mixUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-orange-400 transition-colors"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                </a>
+                {safeHttpUrl(mix.mixUrl) ? (
+                  <a
+                    href={safeHttpUrl(mix.mixUrl)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-orange-400 transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                ) : (
+                  <span className="p-2 rounded-lg text-gray-600 pointer-events-none opacity-50" aria-disabled="true">
+                    <ExternalLink className="w-4 h-4" />
+                  </span>
+                )}
                 <button
                   onClick={() => handleEdit(mix)}
                   className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition-colors"

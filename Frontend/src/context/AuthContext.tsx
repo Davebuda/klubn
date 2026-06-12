@@ -9,6 +9,8 @@ import {
 } from 'react';
 import { useMutation } from '@apollo/client';
 import { LOGIN, REGISTER } from '../graphql/queries';
+import { setAccessToken } from '../apollo-client';
+import { readCsrfToken } from '../lib/csrf';
 
 interface User {
   id: string;
@@ -28,39 +30,76 @@ interface AuthContextValue {
   isOrganizer: boolean;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, fullName: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    fullName: string,
+    acceptTerms: boolean,
+    marketingOptIn?: boolean,
+  ) => Promise<void>;
   logout: () => void;
   updateUserLocal: (updates: Partial<User>) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+// P0-WS3B — REST base for the cookie-bearing auth endpoints. VITE_API_URL is the GraphQL URL
+// (".../graphql"); the REST surface shares the host, so strip the trailing /graphql.
+const API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:5000/graphql').replace(
+  /\/graphql\/?$/,
+  '',
+);
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
+  // P0-WS3B — access token in React state (memory) only; NEVER localStorage. The refresh token is
+  // an HttpOnly cookie the browser holds and JS cannot read.
+  const [token, setTokenState] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loginMutation] = useMutation(LOGIN);
   const [registerMutation] = useMutation(REGISTER);
 
-  useEffect(() => {
-    const storedUser = localStorage.getItem('user');
-    const storedToken = localStorage.getItem('accessToken');
-    if (storedUser) {
-      setUser(JSON.parse(storedUser));
-    }
-    if (storedToken) {
-      setToken(storedToken);
-    }
-    setLoading(false);
+  // Keep the in-memory token mirrored into apollo-client (the non-React auth link reads it there).
+  const setSession = useCallback((accessToken: string | null, account: User | null) => {
+    setTokenState(accessToken);
+    setAccessToken(accessToken);
+    setUser(account);
   }, []);
 
-  const persistSession = (accessToken: string, refreshToken: string, account: User) => {
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
-    localStorage.setItem('user', JSON.stringify(account));
-    setToken(accessToken);
-    setUser(account);
-  };
+  // On mount, try to restore the session from the klubn_rt cookie via /api/auth/refresh. If the
+  // cookie is valid we get a fresh access token + user back (no forced logout on reload); a 401/403
+  // means logged-out. The CSRF token is read from the non-HttpOnly klubn_csrf cookie.
+  useEffect(() => {
+    let cancelled = false;
+    const restore = async () => {
+      try {
+        const csrf = readCsrfToken();
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+        });
+        if (!res.ok) {
+          if (!cancelled) setSession(null, null);
+          return;
+        }
+        const data = await res.json();
+        if (!cancelled && data?.accessToken && data?.user) {
+          setSession(data.accessToken, data.user as User);
+        } else if (!cancelled) {
+          setSession(null, null);
+        }
+      } catch {
+        if (!cancelled) setSession(null, null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    restore();
+    return () => {
+      cancelled = true;
+    };
+  }, [setSession]);
 
   const extractError = (err: unknown, fallback: string): Error => {
     // 1. Check GraphQL errors (returned with 200 status)
@@ -90,48 +129,59 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       try {
         const { data } = await loginMutation({ variables: { email, password } });
         if (data?.login) {
-          const { accessToken, refreshToken, user: account } = data.login;
-          persistSession(accessToken, refreshToken, account);
+          // The backend set the klubn_rt + klubn_csrf cookies; we only keep the access token + user
+          // in memory. The body's refreshToken is intentionally blanked server-side (ignored here).
+          const { accessToken, user: account } = data.login;
+          setSession(accessToken, account);
         }
       } catch (err) {
         throw extractError(err, 'Unable to login with those credentials.');
       }
     },
-    [loginMutation],
+    [loginMutation, setSession],
   );
 
   const register = useCallback(
-    async (email: string, password: string, fullName: string) => {
+    async (
+      email: string,
+      password: string,
+      fullName: string,
+      acceptTerms: boolean,
+      marketingOptIn = false,
+    ) => {
       try {
         const { data } = await registerMutation({
-          variables: { email, password, fullName },
+          variables: { email, password, fullName, acceptTerms, marketingOptIn },
         });
         if (data?.register) {
-          const { accessToken, refreshToken, user: account } = data.register;
-          persistSession(accessToken, refreshToken, account);
+          const { accessToken, user: account } = data.register;
+          setSession(accessToken, account);
         }
       } catch (err) {
         throw extractError(err, 'Registration failed. Please try again.');
       }
     },
-    [registerMutation],
+    [registerMutation, setSession],
   );
 
   const logout = useCallback(() => {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('user');
-    setUser(null);
-    setToken(null);
-  }, []);
+    // Expire the cookies server-side, then clear in-memory state regardless of the result.
+    const csrf = readCsrfToken();
+    fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+    }).catch(() => {
+      /* best-effort; local state is cleared either way */
+    });
+    setSession(null, null);
+  }, [setSession]);
 
-  // Update local user state + localStorage without re-authenticating
+  // Update local user state (memory only) without re-authenticating.
   const updateUserLocal = useCallback((updates: Partial<User>) => {
     setUser((prev) => {
       if (!prev) return prev;
-      const updated = { ...prev, ...updates };
-      localStorage.setItem('user', JSON.stringify(updated));
-      return updated;
+      return { ...prev, ...updates };
     });
   }, []);
 

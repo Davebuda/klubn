@@ -8,6 +8,7 @@ import { useSiteSettings } from '../context/SiteSettingsContext';
 import PageSeo from '../components/common/PageSeo';
 import { ScrollReveal } from '../components/effects/ScrollReveal';
 import { isRealSocialUrl } from '../utils/social';
+import { safeHttpUrl } from '../lib/safeHttpUrl';
 
 const ContactPage = () => {
   const { siteSettings } = useSiteSettings();
@@ -133,10 +134,11 @@ const ContactPage = () => {
                   <div className="grid grid-cols-2 gap-2">
                     {socialLinks.map((social) => {
                       const Icon = social.icon;
-                      return (
+                      const safeSocialUrl = safeHttpUrl(social.url);
+                      return safeSocialUrl ? (
                         <a
                           key={social.label}
-                          href={social.url!}
+                          href={safeSocialUrl}
                           target="_blank"
                           rel="noreferrer"
                           className="flex items-center gap-2 px-4 py-3 rounded-xl border border-white/10 bg-white/[0.03] hover:border-orange-400/30 hover:bg-white/[0.06] transition-all"
@@ -144,7 +146,7 @@ const ContactPage = () => {
                           <Icon className="w-4 h-4 text-gray-400" />
                           <span className="text-sm font-medium text-gray-300">{social.label}</span>
                         </a>
-                      );
+                      ) : null;
                     })}
                   </div>
                 </div>

@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 import PageSeo from '../components/common/PageSeo';
 import { Star, Send, Instagram, Youtube, Facebook, CalendarDays } from 'lucide-react';
+import { safeHttpUrl } from '../lib/safeHttpUrl';
 
 const SoundCloudIcon = ({ className }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="currentColor">
@@ -413,10 +414,11 @@ const DJProfilePage = () => {
                       lbl === 'spotify'    ? { Icon: SpotifyIcon,  color: 'text-green-400',  border: 'hover:border-green-400/60',  bg: 'hover:bg-green-500/10'  } :
                       lbl === 'twitter'    ? { Icon: TwitterXIcon, color: 'text-sky-400',    border: 'hover:border-sky-400/60',    bg: 'hover:bg-sky-500/10'    } :
                                              { Icon: null,         color: 'text-gray-400',   border: 'hover:border-white/30',      bg: 'hover:bg-white/5'       };
-                    return (
+                    const safeEntryUrl = safeHttpUrl(entry.url);
+                    return safeEntryUrl ? (
                       <a
                         key={entry.label}
-                        href={entry.url}
+                        href={safeEntryUrl}
                         target="_blank"
                         rel="noreferrer"
                         className={`flex items-center gap-3 rounded-full border border-white/10 bg-white/5 px-4 py-2.5 text-gray-200 transition ${platform.border} ${platform.bg}`}
@@ -425,7 +427,7 @@ const DJProfilePage = () => {
                         <span className="flex-1 font-medium">{entry.label}</span>
                         <span className="text-xs text-gray-500">↗</span>
                       </a>
-                    );
+                    ) : null;
                   })}
                 </div>
               )}
@@ -474,13 +476,13 @@ const DJProfilePage = () => {
                           <p className="text-xs text-gray-400 truncate">{artist}</p>
                         </div>
                         <div className="flex items-center gap-1.5">
-                          {song?.spotifyUrl && (
-                            <a href={song.spotifyUrl} target="_blank" rel="noopener noreferrer" className="text-green-400 hover:text-green-300 transition" title="Spotify">
+                          {safeHttpUrl(song?.spotifyUrl) && (
+                            <a href={safeHttpUrl(song?.spotifyUrl)} target="_blank" rel="noopener noreferrer" className="text-green-400 hover:text-green-300 transition" title="Spotify">
                               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
                             </a>
                           )}
-                          {song?.soundCloudUrl && (
-                            <a href={song.soundCloudUrl} target="_blank" rel="noopener noreferrer" className="text-orange-400 hover:text-orange-300 transition" title="SoundCloud">
+                          {safeHttpUrl(song?.soundCloudUrl) && (
+                            <a href={safeHttpUrl(song?.soundCloudUrl)} target="_blank" rel="noopener noreferrer" className="text-orange-400 hover:text-orange-300 transition" title="SoundCloud">
                               <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M1.175 12.225c-.051 0-.094.046-.101.1l-.233 2.154.233 2.105c.007.058.05.098.101.098.05 0 .09-.04.099-.098l.255-2.105-.27-2.154c-.009-.057-.05-.1-.1-.1m-.899.828c-.06 0-.091.037-.104.094L0 14.479l.172 1.308c.013.06.045.094.104.094.057 0 .09-.037.104-.094l.194-1.308-.194-1.332c-.014-.057-.047-.094-.104-.094m1.81-.78c-.067 0-.12.054-.127.116l-.217 2.09.217 2.063c.007.065.06.116.127.116.066 0 .12-.05.126-.116l.241-2.063-.241-2.09c-.006-.062-.06-.116-.126-.116m.891-.278c-.074 0-.133.062-.14.138l-.202 2.368.202 2.087c.007.074.066.135.14.135.076 0 .135-.061.14-.135l.228-2.087-.228-2.368c-.005-.076-.064-.138-.14-.138m.904-.118c-.08 0-.143.068-.148.15l-.19 2.486.19 2.075c.005.08.068.148.148.148.08 0 .142-.068.15-.148l.213-2.075-.214-2.486c-.008-.082-.07-.15-.15-.15m.89.044c-.09 0-.158.074-.163.163l-.178 2.442.178 2.058c.005.09.074.161.164.161.088 0 .157-.072.163-.161l.2-2.058-.2-2.442c-.006-.09-.075-.163-.163-.163m.908-.18c-.094 0-.17.08-.176.176l-.165 2.622.165 2.04c.006.094.082.174.176.174s.17-.08.177-.174l.186-2.04-.186-2.622c-.007-.096-.083-.176-.177-.176m.926-.2c-.104 0-.184.088-.19.192l-.151 2.822.151 2.018c.006.103.086.19.19.19.103 0 .184-.087.19-.19l.17-2.018-.17-2.822c-.006-.104-.087-.192-.19-.192m.94-.12c-.107 0-.194.094-.2.206l-.14 2.942.14 1.993c.006.11.093.202.2.202.11 0 .197-.09.204-.202l.155-1.993-.156-2.942c-.006-.112-.093-.206-.203-.206m2.852-1.578c-.106 0-.19.088-.196.197l-.14 4.52.14 1.96c.006.107.09.195.197.195.108 0 .192-.088.197-.195l.16-1.96-.16-4.52c-.005-.11-.09-.197-.198-.197m-1.907 1.15c-.116 0-.206.1-.212.218l-.127 3.37.127 1.975c.006.116.096.215.212.215.117 0 .207-.1.212-.215l.144-1.975-.144-3.37c-.005-.12-.095-.218-.212-.218m.945-.304c-.12 0-.22.108-.224.232l-.118 3.674.118 1.964c.005.122.103.228.224.228.12 0 .218-.106.224-.228l.132-1.964-.132-3.674c-.006-.124-.104-.232-.224-.232m3.753-.897c-.065 0-.127.017-.182.05-.093-.608-.513-1.087-1.065-1.27-.145-.048-.3-.073-.459-.073-1.047 0-4.757 0-4.757 0-.12.005-.215.103-.215.225v7.94c0 .126.1.228.224.232h6.454c1.16 0 2.1-.94 2.1-2.1 0-1.16-.94-2.1-2.1-2.1"/></svg>
                             </a>
                           )}

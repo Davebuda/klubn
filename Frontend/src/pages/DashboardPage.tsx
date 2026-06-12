@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { getAccessToken } from '../apollo-client';
 import { useQuery, useMutation } from '@apollo/client';
 import { GET_USER_TICKETS, UPDATE_USER_PROFILE, HAS_PENDING_DJ_APPLICATION } from '../graphql/queries';
 import { Ticket, Calendar, TrendingUp, Upload, Award, Music, Users, Camera, Disc3, Clock, Building2 } from 'lucide-react';
@@ -22,7 +23,7 @@ const DashboardPage = () => {
       formData.append('file', file);
       formData.append('folder', 'avatars');
 
-      const token = localStorage.getItem('accessToken');
+      const token = getAccessToken(); // P0-WS3B — in-memory token, not localStorage
       const uploadBase = import.meta.env.VITE_UPLOAD_API_URL ?? 'http://localhost:5000/api/FileUpload/image';
       const response = await fetch(uploadBase, {
         method: 'POST',

@@ -16,6 +16,7 @@ import { EqualizerDivider, SoundWaveDivider, MarqueeStrip, BeatPulseLine, VinylS
 import { useCountUp } from '../hooks/useCountUp';
 import PageSeo from '../components/common/PageSeo';
 import { isRealSocialUrl } from '../utils/social';
+import { safeHttpUrl } from '../lib/safeHttpUrl';
 
 type ShowcaseItem = {
   label: string;
@@ -1041,11 +1042,13 @@ const LandingPage = () => {
         </div>
 
         <StaggerContainer className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {(mixesData?.djMixes ?? []).slice(0, 3).map((mix: any) => (
+          {(mixesData?.djMixes ?? []).slice(0, 3).map((mix: any) => {
+            const safeMixUrl = safeHttpUrl(mix.mixUrl);
+            return safeMixUrl ? (
             <StaggerItem key={mix.id}>
             <TiltCard intensity={8}>
             <a
-              href={mix.mixUrl}
+              href={safeMixUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="liquid-glass group block rounded-3xl border border-white/[0.10] bg-gradient-to-b from-white/[0.12] to-white/[0.03] shadow-[inset_0_1px_0_rgba(255,255,255,0.15),_0_8px_32px_rgba(0,0,0,0.4)] overflow-hidden hover:from-white/[0.16] hover:to-white/[0.05] hover:border-white/[0.18] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.2),_0_8px_32px_rgba(0,0,0,0.5)] transition-all duration-300"
@@ -1085,7 +1088,8 @@ const LandingPage = () => {
             </a>
             </TiltCard>
             </StaggerItem>
-          ))}
+            ) : null;
+          })}
         </StaggerContainer>
       </section>
 
@@ -1114,10 +1118,12 @@ const LandingPage = () => {
             { label: 'YouTube', icon: 'M23.5 6.19a3.02 3.02 0 0 0-2.12-2.14C19.5 3.5 12 3.5 12 3.5s-7.5 0-9.38.55A3.02 3.02 0 0 0 .5 6.19 31.6 31.6 0 0 0 0 12a31.6 31.6 0 0 0 .5 5.81 3.02 3.02 0 0 0 2.12 2.14c1.88.55 9.38.55 9.38.55s7.5 0 9.38-.55a3.02 3.02 0 0 0 2.12-2.14A31.6 31.6 0 0 0 24 12a31.6 31.6 0 0 0-.5-5.81zM9.75 15.02V8.98L15.5 12l-5.75 3.02z', url: siteSettings.youTubeUrl },
             { label: 'Twitter', icon: 'M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z', url: siteSettings.twitterUrl },
             { label: 'SoundCloud', icon: 'M1.175 12.225c-.051 0-.094.046-.101.1l-.233 2.154.233 2.105c.007.058.05.098.101.098.05 0 .09-.04.099-.098l.255-2.105-.27-2.154c-.009-.06-.05-.1-.1-.1m1.2-.8c-.064 0-.11.05-.119.114l-.209 2.953.209 2.88c.009.06.055.108.12.108.063 0 .11-.048.12-.108l.236-2.88-.236-2.954c-.011-.063-.058-.113-.12-.113m1.223-.27c-.074 0-.127.058-.135.127l-.186 3.223.186 3.1c.008.07.06.124.135.124.073 0 .126-.054.134-.124l.21-3.1-.21-3.223c-.009-.069-.061-.127-.134-.127m1.273.156c-.088 0-.145.066-.152.143l-.163 2.893.163 3.05c.007.078.064.14.152.14.086 0 .144-.063.152-.14l.184-3.05-.184-2.893c-.008-.077-.066-.143-.152-.143m1.248-.55c-.099 0-.165.076-.172.16l-.14 3.287.14 3.024c.007.087.073.157.172.157.097 0 .163-.07.171-.157l.16-3.024-.16-3.286c-.008-.085-.074-.161-.171-.161m1.3.228c-.11 0-.182.085-.19.177l-.117 3.06.117 2.997c.008.095.08.172.19.172.108 0 .18-.077.189-.172l.132-2.997-.132-3.06c-.009-.092-.08-.177-.189-.177m1.318-.34c-.127 0-.2.095-.208.196l-.093 3.168.093 2.97c.007.105.08.19.208.19.12 0 .198-.085.207-.19l.107-2.97-.107-3.168c-.009-.1-.087-.196-.207-.196m3.488-1.14c-.16 0-.27.12-.28.254l-.05 4.03.05 2.878c.008.13.12.234.28.234.155 0 .27-.104.278-.234l.057-2.878-.057-4.03c-.008-.134-.123-.254-.278-.254m1.295.108c-.165 0-.283.127-.29.267l-.035 3.909.035 2.86c.007.14.125.25.29.25.163 0 .28-.11.29-.25l.04-2.86-.04-3.91c-.01-.14-.127-.266-.29-.266m-2.607-.024c-.14 0-.244.11-.253.233l-.065 3.942.065 2.904c.008.12.112.22.253.22.138 0 .24-.1.25-.22l.074-2.904-.074-3.942c-.01-.123-.112-.233-.25-.233m3.953-.544c-.178 0-.305.135-.312.29l-.02 4.435.02 2.832c.007.152.134.276.312.276.174 0 .303-.124.31-.276l.023-2.832-.023-4.435c-.007-.155-.136-.29-.31-.29m1.322.14c-.19 0-.32.142-.328.303v.013l-.006 4.3.012 2.807c.008.16.139.287.322.287.18 0 .312-.127.322-.287l.014-2.82-.014-4.287c-.01-.16-.142-.316-.322-.316m1.3.463c-.2 0-.338.153-.344.323l-.01 3.824.01 2.8c.006.168.145.3.345.3a.33.33 0 0 0 .34-.3l.012-2.8-.013-3.824a.336.336 0 0 0-.34-.323m1.2.4a3.63 3.63 0 0 0-1.667.398 3.65 3.65 0 0 0-1.95 3.237v.015l-.003 2.588c0 .185.15.335.337.335h6.6c.46 0 .832-.374.832-.835v-2.03a3.67 3.67 0 0 0-3.67-3.67l-.48-.04z', url: siteSettings.soundCloudUrl },
-          ].filter((s) => isRealSocialUrl(s.url)).map((social) => (
+          ].filter((s) => isRealSocialUrl(s.url)).map((social) => {
+            const safeSocialUrl = safeHttpUrl(social.url);
+            return safeSocialUrl ? (
             <a
               key={social.label}
-              href={social.url!}
+              href={safeSocialUrl}
               target="_blank"
               rel="noreferrer"
               className="liquid-glass group flex items-center gap-3 rounded-2xl border border-white/[0.10] bg-gradient-to-b from-white/[0.08] to-white/[0.02] px-6 py-4 transition-all hover:border-orange-400/30 hover:from-white/[0.12]"
@@ -1127,7 +1133,8 @@ const LandingPage = () => {
               </svg>
               <span className="text-sm font-semibold text-gray-300 group-hover:text-white transition-colors">{social.label}</span>
             </a>
-          ))}
+            ) : null;
+          })}
         </div>
       </section>
       </ScrollReveal>

@@ -1,4 +1,4 @@
-import { useState, useRef, ChangeEvent, useEffect, useMemo } from 'react';
+import { useState, useRef, ChangeEvent, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
 interface VideoUploadProps {
@@ -22,11 +22,8 @@ const VideoUpload = ({
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const resolvedToken = useMemo(() => {
-    if (token) return token;
-    if (typeof window !== 'undefined') return localStorage.getItem('accessToken');
-    return null;
-  }, [token]);
+  // P0-WS3B — the access token is in memory (AuthContext), never localStorage.
+  const resolvedToken = token;
 
   useEffect(() => {
     setPreview(currentVideoUrl || null);

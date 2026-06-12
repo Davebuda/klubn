@@ -1,5 +1,6 @@
 import { useSiteSettings } from '../../context/SiteSettingsContext';
 import { isRealSocialUrl } from '../../utils/social';
+import { safeHttpUrl } from '../../lib/safeHttpUrl';
 import VippsIcon from './VippsIcon';
 
 const Footer = () => {
@@ -56,11 +57,14 @@ const Footer = () => {
             <a href={`mailto:${contactEmail}`} className="hover:text-white transition">
               {contactEmail}
             </a>
-            {socialLinks.map((link) => (
-              <a key={link.label} href={link.url!} target="_blank" rel="noreferrer" className="hover:text-white transition">
-                {link.label}
-              </a>
-            ))}
+            {socialLinks.map((link) => {
+              const safeLinkUrl = safeHttpUrl(link.url);
+              return safeLinkUrl ? (
+                <a key={link.label} href={safeLinkUrl} target="_blank" rel="noreferrer" className="hover:text-white transition">
+                  {link.label}
+                </a>
+              ) : null;
+            })}
           </div>
         </div>
 

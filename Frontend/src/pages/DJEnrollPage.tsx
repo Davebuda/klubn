@@ -2,6 +2,7 @@ import { FormEvent, useState } from 'react';
 import { useQuery, useMutation } from '@apollo/client';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { getAccessToken } from '../apollo-client';
 import {
   SUBMIT_DJ_APPLICATION,
   HAS_PENDING_DJ_APPLICATION,
@@ -51,7 +52,7 @@ const DJEnrollPage = () => {
     formData.append('file', file);
     formData.append('folder', folder);
 
-    const token = localStorage.getItem('accessToken');
+    const token = getAccessToken(); // P0-WS3B — in-memory token, not localStorage
     const uploadBase = import.meta.env.VITE_UPLOAD_API_URL ?? 'http://localhost:5000/api/FileUpload/image';
     const response = await fetch(uploadBase, {
       method: 'POST',

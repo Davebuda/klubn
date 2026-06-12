@@ -17,8 +17,22 @@ export const LOGIN = gql`
 `;
 
 export const REGISTER = gql`
-  mutation Register($email: String!, $password: String!, $fullName: String!) {
-    register(input: { email: $email, password: $password, fullName: $fullName }) {
+  mutation Register(
+    $email: String!
+    $password: String!
+    $fullName: String!
+    $acceptTerms: Boolean!
+    $marketingOptIn: Boolean
+  ) {
+    register(
+      input: {
+        email: $email
+        password: $password
+        fullName: $fullName
+        acceptTerms: $acceptTerms
+        marketingOptIn: $marketingOptIn
+      }
+    ) {
       accessToken
       refreshToken
       user {
