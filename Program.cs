@@ -3458,6 +3458,8 @@ public class Mutation
         }
         if (input.MinPerOrder.HasValue) tt.MinPerOrder = input.MinPerOrder.Value;
         if (input.MaxPerOrder.HasValue) tt.MaxPerOrder = input.MaxPerOrder.Value;
+        if (tt.MinPerOrder < 1)
+            throw new GraphQLException("MinPerOrder must be at least 1.");
         if (tt.MaxPerOrder < tt.MinPerOrder)
             throw new GraphQLException("MaxPerOrder cannot be less than MinPerOrder.");
         if (input.SalesStart.HasValue) tt.SalesStart = input.SalesStart;
