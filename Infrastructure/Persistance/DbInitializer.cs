@@ -98,7 +98,30 @@ namespace DJDiP.Infrastructure.Persistance
                         ""IsPublished"" BOOLEAN NOT NULL DEFAULT FALSE,
                         ""SortOrder"" INTEGER NOT NULL DEFAULT 0,
                         ""CreatedAt"" TIMESTAMP NOT NULL DEFAULT NOW()
-                      );");
+                      );
+                      -- AuditLog (WS2 / TM-1) append-only trail. Runtime uses EnsureCreated, so
+                      -- existing Postgres DBs need this idempotent catch-up (fresh SQLite gets the
+                      -- table + indexes from the model via EnsureCreated). Postgres syntax by design.
+                      CREATE TABLE IF NOT EXISTS ""AuditLogs"" (
+                        ""Id"" UUID PRIMARY KEY,
+                        ""Timestamp"" TIMESTAMP NOT NULL DEFAULT NOW(),
+                        ""Action"" TEXT NOT NULL DEFAULT '',
+                        ""EntityName"" TEXT NOT NULL DEFAULT '',
+                        ""EntityId"" TEXT NOT NULL DEFAULT '',
+                        ""UserId"" TEXT NOT NULL DEFAULT '',
+                        ""Changes"" TEXT
+                      );
+                      CREATE INDEX IF NOT EXISTS ""IX_AuditLogs_EntityName_EntityId"" ON ""AuditLogs""(""EntityName"", ""EntityId"");
+                      CREATE INDEX IF NOT EXISTS ""IX_AuditLogs_UserId"" ON ""AuditLogs""(""UserId"");
+                      CREATE INDEX IF NOT EXISTS ""IX_AuditLogs_Timestamp"" ON ""AuditLogs""(""Timestamp"");
+                      -- GDPR consent (WS3C) — signup terms + separate marketing opt-in. Same
+                      -- catch-up pattern as AuditLogs: fresh SQLite gets these via EnsureCreated
+                      -- from the model; existing Postgres DBs get them here. Postgres-only syntax.
+                      ALTER TABLE ""ApplicationUsers"" ADD COLUMN IF NOT EXISTS ""TermsAcceptedAt"" TIMESTAMP;
+                      ALTER TABLE ""ApplicationUsers"" ADD COLUMN IF NOT EXISTS ""TermsVersion"" TEXT;
+                      ALTER TABLE ""ApplicationUsers"" ADD COLUMN IF NOT EXISTS ""MarketingOptIn"" BOOLEAN NOT NULL DEFAULT FALSE;
+                      ALTER TABLE ""ApplicationUsers"" ADD COLUMN IF NOT EXISTS ""MarketingOptInAt"" TIMESTAMP;
+                      ALTER TABLE ""ApplicationUsers"" ADD COLUMN IF NOT EXISTS ""MarketingPurpose"" TEXT;");
 
                 // ── Ticketing + payments (P1/P2) — prod schema evolution. Runtime uses
                 // EnsureCreated, so existing Postgres DBs never receive the EF migrations;

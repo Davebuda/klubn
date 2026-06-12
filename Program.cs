@@ -1,4 +1,6 @@
 using System.Text;
+using System.Text.Json;
+using DJDiP.Application.DTO.AuditLogDTO;
 using DJDiP.Application.DTO.DJProfileDTO;
 using DJDiP.Application.DTO.DJApplicationDTO;
 using DJDiP.Application.DTO.EventDTO;
@@ -17,12 +19,17 @@ using DJDiP.Application.DTO.GalleryDTO;
 using DJDiP.Application.DTO.HighlightDTO;
 using DJDiP.Application.DTO.UserDTO;
 using DJDiP.Application.DTO.Auth;
+using DJDiP.Application.Common;
 using DJDiP.Application.Interfaces;
 using DJDiP.Application.Services;
 using DJDiP.Application.Options;
 using DJDiP.Infrastructure.Persistance;
 using DJDiP.Domain.Models;
 using HotChocolate;
+using HotChocolate.AspNetCore;
+using HotChocolate.AspNetCore.Formatters;
+using HotChocolate.CostAnalysis;
+using HotChocolate.Execution;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -39,7 +46,19 @@ Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
     .Enrich.FromLogContext()
     .WriteTo.Console()
-    .WriteTo.File("logs/djdip-.log", rollingInterval: RollingInterval.Day)
+    // P0-WS3C (GDPR) — bounded, retained file sink. Absolute path under a mounted/retained
+    // volume (Logs__Directory overrides; defaults to an absolute "<contentRoot or cwd>/logs"),
+    // daily rolling, capped at ~14 daily files (retainedFileCountLimit) AND rolled on a size
+    // limit so an unbounded write can't blow the disk or evade retention. Console sink kept.
+    .WriteTo.File(
+        System.IO.Path.Combine(
+            Environment.GetEnvironmentVariable("Logs__Directory")
+                ?? System.IO.Path.Combine(AppContext.BaseDirectory, "logs"),
+            "djdip-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 14,
+        rollOnFileSizeLimit: true,
+        fileSizeLimitBytes: 50 * 1024 * 1024)
     .CreateLogger();
 
 try
@@ -97,8 +116,15 @@ builder.Services.Configure<IpRateLimitOptions>(options =>
     options.EnableEndpointRateLimiting = true;
     options.StackBlockedRequests = false;
     options.HttpStatusCode = 429;
-    options.RealIpHeader = "X-Real-IP";
-    options.ClientIdHeader = "X-ClientId";
+    // WS3A — non-spoofable keying. AspNetCoreRateLimit registers an IpHeaderResolveContributor
+    // (which trusts a client-settable header) ONLY when RealIpHeader is non-null, and it wins over
+    // the connection IP. ClientHeaderResolveContributor is added only when ClientIdHeader is non-null.
+    // Leaving BOTH null forces the library to key solely on Connection.RemoteIpAddress — which
+    // UseForwardedHeaders (below) reconstructs from X-Forwarded-For via the KNOWN Traefik proxy only.
+    // Net effect: rotating X-Real-IP / X-ClientId can no longer mint fresh rate-limit buckets.
+    // (Verified against AspNetCoreRateLimit 5.0.0 RateLimitConfiguration.RegisterResolvers.)
+    options.RealIpHeader = null;
+    options.ClientIdHeader = null;
     options.GeneralRules = new List<RateLimitRule>
     {
         new RateLimitRule
@@ -115,10 +141,44 @@ builder.Services.Configure<IpRateLimitOptions>(options =>
         }
     };
 });
+// CRITICAL: RateLimitConfiguration.GetRealIp()/GetClientIdHeader() fall back to
+// ClientRateLimitOptions when the Ip-options value is null (IpRateLimitOptions?.X ?? ClientRateLimitOptions?.X).
+// ClientRateLimitOptions is DI-default-constructed even though we never use client-id limiting, and its
+// defaults are still "X-Real-IP"/"X-ClientId" — so we MUST null them here too, or the spoofable header
+// contributors get re-registered via the fallback and header rotation defeats the limiter.
+builder.Services.Configure<ClientRateLimitOptions>(options =>
+{
+    options.RealIpHeader = null;
+    options.ClientIdHeader = null;
+});
 builder.Services.AddSingleton<IIpPolicyStore, MemoryCacheIpPolicyStore>();
 builder.Services.AddSingleton<IRateLimitCounterStore, MemoryCacheRateLimitCounterStore>();
 builder.Services.AddSingleton<IRateLimitConfiguration, RateLimitConfiguration>();
 builder.Services.AddSingleton<IProcessingStrategy, AsyncKeyLockProcessingStrategy>();
+
+// WS3A — forwarded-headers so Connection.RemoteIpAddress is the REAL client IP behind Traefik,
+// which is what the rate limiter now keys on (RealIpHeader/ClientIdHeader were nulled above).
+// We trust X-Forwarded-For/Proto only from KNOWN proxies (loopback + RFC1918 private ranges that
+// cover the Traefik/Docker network); KnownNetworks/KnownProxies are cleared and re-seeded so an
+// untrusted hop cannot inject a spoofed XFF. ForwardLimit=1 (single Traefik hop in front of us).
+builder.Services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedFor |
+        Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = 1;
+    // .NET 10: KnownIPNetworks + System.Net.IPNetwork (the old KnownNetworks/HttpOverrides.IPNetwork
+    // are obsolete — ASPDEPR005). Cleared then re-seeded with the trusted proxy ranges only.
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+    // loopback (Traefik on the same host / direct dev)
+    options.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("127.0.0.1"), 8));
+    options.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.IPv6Loopback, 128));
+    // private ranges covering the Docker/Traefik bridge networks
+    options.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("10.0.0.0"), 8));
+    options.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("172.16.0.0"), 12));
+    options.KnownIPNetworks.Add(new System.Net.IPNetwork(System.Net.IPAddress.Parse("192.168.0.0"), 16));
+});
 
 // ========== HTTP CONTEXT ACCESSOR ==========
 builder.Services.AddHttpContextAccessor();
@@ -134,7 +194,7 @@ builder.Services.AddCors(options =>
     {
         policy
             .WithOrigins(corsOrigins)
-            .WithHeaders("Authorization", "Content-Type", "Accept", "X-Requested-With")
+            .WithHeaders("Authorization", "Content-Type", "Accept", "X-Requested-With", "X-CSRF-Token")
             .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
             .AllowCredentials();
     });
@@ -154,16 +214,26 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 // ========== REGISTER SERVICES ==========
+// WSx SSRF hardening: the oEmbed metadata client must NOT follow redirects, so a Spotify/SoundCloud
+// oEmbed 30x can't bounce the server into an attacker-controlled fetch.
+builder.Services.AddHttpClient("oembed")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IEventService, EventServiceImpl>();
 builder.Services.AddScoped<IDJService, DJService>();
 builder.Services.AddScoped<IGenreService, GenreService>();
 builder.Services.AddScoped<IVenueService, VenueService>();
 builder.Services.AddScoped<IContactMessageService, ContactMessageService>();
+builder.Services.AddScoped<IAuditLogService, AuditLogService>();
 builder.Services.AddScoped<INewsletterService, NewsletterService>();
 builder.Services.AddScoped<IDJTop10Service, DJTop10Service>();
 builder.Services.AddScoped<IFollowService, FollowService>();
+// WS3A — per-account login lockout. Singleton: it wraps the singleton IMemoryCache; the scoped
+// AuthService receives it via constructor injection.
+builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+// P0-WS3B — signed refresh-token + CSRF token minting/validation (no DB; reuses the JWT key).
+builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
 builder.Services.AddScoped<ITicketService, TicketService>();
 builder.Services.AddScoped<ISongService, SongService>();
 builder.Services.AddScoped<IDJApplicationService, DJApplicationService>();
@@ -369,7 +439,53 @@ builder.Services
     {
         opt.IncludeExceptionDetails = builder.Environment.IsDevelopment();
     })
-    .ModifyOptions(o => o.StrictValidation = false);
+    // WSx (HC13->16 migration) — Cost Analysis REPLACES the v13 operation-complexity analyzer
+    // (opt.Complexity was removed in HC14). REPORT-ONLY for now: EnforceCostLimits=false, so costs
+    // are computed and inspectable (send the `GraphQL-Cost: report`/`validate` header) but a query
+    // is NEVER rejected on cost. The Max*Cost values are PLACEHOLDERS pending calibration sign-off —
+    // do not treat them as enforced. The defense-in-depth that DOES reject today stays on:
+    // AddMaxExecutionDepthRule(15) + the 1 MB /graphql body cap in the middleware pipeline.
+    // Enforcement will be enabled only after the calibrated ceilings are approved (docs/audit/graphql/).
+    .ModifyCostOptions(o =>
+    {
+        // ENFORCED (signed off 2026-06-12): costs are computed AND a query is REJECTED before
+        // execution when it exceeds a ceiling. Ceilings are CALIBRATED, not arbitrary: measured
+        // legitimate max is fieldCost 16 / typeCost 6 (deepest real selections); a weighted
+        // alias-flood scales ~10/field (300x => 3000/301). 500/250 gives ~30x headroom over real
+        // usage while rejecting floods of >=~50 weighted fields. This restores+improves the WS3A
+        // anti-DoS guard the (removed) HC13 complexity analyzer used to provide. NOTE: meta-field
+        // (__typename) floods compute to cost 0, so enforcement does NOT cover them — depth(15) +
+        // the 1 MB body cap remain the guard for those. See docs/audit/graphql/.
+        o.EnforceCostLimits = true;  // enforcement ON (calibrated ceilings below)
+        o.MaxFieldCost = 500;        // calibrated ceiling (legit max ~16)
+        o.MaxTypeCost = 250;         // calibrated ceiling (legit max ~6)
+    })
+    .ModifyOptions(o => o.StrictValidation = false)
+    // WS3A — max selection-set depth. 15 sits well above the schema's deepest legitimate path
+    // (flat DTOs nest ~4-6 levels; the deepest real chain Order->OrderItems->Ticket->Event is ~5)
+    // and above introspection's own depth (~8), so Dev introspection and all real queries pass
+    // while pathological deep-nesting DoS is rejected pre-execution. Still valid in HC16.
+    .AddMaxExecutionDepthRule(15)
+    // WS3A — forward-looking paging guard. The schema returns flat lists (no [UsePaging]), so this
+    // caps any future cursor-paged list field at 100 items/page; a no-op on the present resolvers.
+    // HC16 ModifyPagingOptions replaces the v13 SetPagingOptions(new PagingOptions{...}).
+    .ModifyPagingOptions(o => { o.MaxPageSize = 100; o.DefaultPageSize = 10; })
+    // WS3A/WSx — introspection (__schema/__type) is Dev-only. HC16 first-classes this with the
+    // builder-level DisableIntrospection(disable): when disable=true introspection is rejected
+    // EXCEPT for requests carrying an explicit introspection-allowed flag. Passing
+    // !IsDevelopment() disables it everywhere but Development, replacing the v13 per-request
+    // re-allow workaround (the removed DjDipIntrospectionInterceptor).
+    .DisableIntrospection(!builder.Environment.IsDevelopment())
+    // WSx (HC13->16) — keep the existing frontend's HTTP contract stable across the upgrade. HC16
+    // defaults to the GraphQL-over-HTTP spec (Content-Type application/graphql-response+json, and a
+    // non-200 status when the response carries errors). The SPA (Frontend/src/apollo-client.ts)
+    // expects application/json with a 200 body even when GraphQL errors are present.
+    // HttpTransportVersion.Legacy preserves exactly that contract, so no frontend change is needed
+    // and the existing 500->200 shim simply never triggers.
+    .AddHttpResponseFormatter(new HttpResponseFormatterOptions
+    {
+        HttpTransportVersion = HttpTransportVersion.Legacy
+    });
 
 
 var app = builder.Build();
@@ -391,6 +507,38 @@ using (var scope = app.Services.CreateScope())
 }
 
 // ========== MIDDLEWARE ==========
+// WS3A — reconstruct the real client IP from X-Forwarded-For (trusted Traefik proxy only) BEFORE
+// anything reads Connection.RemoteIpAddress, so the rate limiter keys on the true client IP.
+app.UseForwardedHeaders();
+
+// WS3A — request-body-size cap for /graphql. Reject POSTs whose Content-Length exceeds 1 MB with
+// 413 BEFORE the GraphQL parser runs (interim mitigation for the HC parser attack surface). This
+// is a targeted branch — the GLOBAL Kestrel limit is untouched so REST /api/FileUpload keeps 50 MB.
+const long GraphQlMaxBodyBytes = 1_048_576; // 1 MB
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/graphql") &&
+        HttpMethods.IsPost(context.Request.Method))
+    {
+        // Fast path: a declared Content-Length over the cap is rejected before any body is read.
+        if (context.Request.ContentLength is long len && len > GraphQlMaxBodyBytes)
+        {
+            context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            context.Response.ContentType = "text/plain";
+            await context.Response.WriteAsync("GraphQL request body too large.");
+            return;
+        }
+        // Defense-in-depth for chunked uploads (no Content-Length): cap what Kestrel will read for
+        // THIS request only, so an over-cap streamed body faults during read rather than buffering.
+        var sizeFeature = context.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+        if (sizeFeature is { IsReadOnly: false })
+        {
+            sizeFeature.MaxRequestBodySize = GraphQlMaxBodyBytes;
+        }
+    }
+    await next();
+});
+
 // Security Headers
 app.Use(async (context, next) =>
 {
@@ -427,10 +575,9 @@ app.MapHealthChecks("/health");
 app.MapGet("/", () => "DJ-DiP API is running! Visit /graphql for GraphQL playground.");
 
 // GraphQL endpoint
-app.MapGraphQL("/graphql").WithOptions(new HotChocolate.AspNetCore.GraphQLServerOptions
-{
-    Tool = { Enable = app.Environment.IsDevelopment() }
-});
+// WSx (HC13->16): WithOptions now takes a configuration delegate (v16 migration). The Nitro/
+// BananaCakePop IDE tool stays dev-only, exactly as before.
+app.MapGraphQL("/graphql").WithOptions(o => o.Tool.Enable = app.Environment.IsDevelopment());
 
 // Dynamic sitemap
 app.MapGet("/sitemap.xml", async (AppDbContext db, HttpContext ctx) =>
@@ -494,8 +641,48 @@ finally
     Log.CloseAndFlush();
 }
 
+// WSx (HC13->16) — the v13 DjDipIntrospectionInterceptor was removed here. HC16 honours the
+// schema-level AllowIntrospection(env.IsDevelopment()) flag per HTTP request natively, so the
+// custom DefaultHttpRequestInterceptor that re-set WellKnownContextData.IntrospectionAllowed is no
+// longer needed. Introspection remains Dev-only; __schema/__type are rejected outside Development.
+
 public class Query
 {
+    // ===== WS2 — Admin audit-log read (TM-1) =====
+    // Admin-gated read of the append-only audit trail. Anonymous and non-admin callers are
+    // denied by RequireAdmin (reused from Mutation). Filters are optional; take<=0 defaults to 100.
+    public async Task<IEnumerable<AuditLogDTO>> AuditLogs(
+        string? entityName,
+        string? entityId,
+        string? userId,
+        int skip,
+        int take,
+        [Service] IAuditLogService auditLogService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        Mutation.RequireAdmin(httpContextAccessor);
+        return await auditLogService.QueryAsync(new AuditLogFilter
+        {
+            EntityName = entityName,
+            EntityId = entityId,
+            UserId = userId,
+            Skip = skip,
+            Take = take <= 0 ? 100 : take
+        });
+    }
+
+    // ===== WS3C — GDPR self-service export (Art. 15/20) =====
+    // Owner-scoped: returns ONLY the caller's own data. There is deliberately NO client id
+    // param — the scope is the JWT id from RequireAuthentication, so a user can never export
+    // another user's data. Returns the caller's profile + their tickets + orders.
+    public async Task<DJDiP.Application.DTO.UserDTO.ExportDataDto?> ExportMyData(
+        [Service] IUserService userService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        var callerId = Mutation.RequireAuthentication(httpContextAccessor);
+        return await userService.ExportUserDataAsync(callerId);
+    }
+
     // ===== Ticketing — provider-agnostic checkout reads (design §6) =====
 
     // Live ticket tiers for an event (drafts hidden). Available is computed, never stored.
@@ -640,8 +827,12 @@ public class Query
     // Follow stats helpers
     public async Task<IEnumerable<DJProfileListItemDto>> FollowedDjs(
         string userId,
-        [Service] IFollowService followService)
+        [Service] IFollowService followService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (IDOR): require auth; only the user themselves (or Admin) may read who
+        // they follow.
+        Mutation.RequireSelfOrAdmin(httpContextAccessor, userId);
         return await followService.GetFollowedDjsAsync(userId);
     }
 
@@ -670,20 +861,29 @@ public class Query
 
     public async Task<DJApplicationDto?> DjApplicationByUser(
         string userId,
-        [Service] IDJApplicationService djApplicationService)
+        [Service] IDJApplicationService djApplicationService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (MISSING-AUTH): owner-or-admin read.
+        Mutation.RequireSelfOrAdmin(httpContextAccessor, userId);
         return await djApplicationService.GetApplicationByUserIdAsync(userId);
     }
 
     public async Task<IEnumerable<DJApplicationDto>> DjApplications(
-        [Service] IDJApplicationService djApplicationService)
+        [Service] IDJApplicationService djApplicationService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (table dump): Admin/CoAdmin only.
+        Mutation.RequireCoAdmin(httpContextAccessor);
         return await djApplicationService.GetAllApplicationsAsync();
     }
 
     public async Task<IEnumerable<DJApplicationDto>> PendingDjApplications(
-        [Service] IDJApplicationService djApplicationService)
+        [Service] IDJApplicationService djApplicationService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (table dump): Admin/CoAdmin only.
+        Mutation.RequireCoAdmin(httpContextAccessor);
         return await djApplicationService.GetPendingApplicationsAsync();
     }
 
@@ -697,23 +897,58 @@ public class Query
     // Tickets
     public async Task<IEnumerable<TicketDto>> TicketsByUser(
         string userId,
-        [Service] ITicketService ticketService)
+        [Service] ITicketService ticketService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
-        return await ticketService.GetTicketsByUserIdAsync(userId);
+        // P0-WS1 (MISSING-AUTH): owner-or-manager read of a user's tickets. A manager reading
+        // ANOTHER user's tickets does NOT receive the live QR door tokens (Chain #1) — only
+        // the ticket owner sees their own QR, matching the single-ticket `Ticket` resolver.
+        var callerUserId = Mutation.RequireSelfOrAdmin(httpContextAccessor, userId);
+        var tickets = await ticketService.GetTicketsByUserIdAsync(userId);
+        if (callerUserId != userId)
+            foreach (var t in tickets)
+                t.QRCode = string.Empty;
+        return tickets;
     }
 
     public async Task<IEnumerable<TicketDto>> TicketsByEvent(
         Guid eventId,
-        [Service] ITicketService ticketService)
+        [Service] ITicketService ticketService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
-        return await ticketService.GetTicketsByEventIdAsync(eventId);
+        // P0-WS1 (MISSING-AUTH, Chain #1): the attendee list leaks live door tokens via
+        // TicketDto.QRCode, so it is gated to Admin/CoAdmin/staff. The raw QR is additionally
+        // stripped from the list projection — door scanning uses the dedicated /scan path,
+        // never this bulk read.
+        Mutation.RequireCoAdmin(httpContextAccessor);
+        var tickets = await ticketService.GetTicketsByEventIdAsync(eventId);
+        foreach (var t in tickets)
+            t.QRCode = string.Empty;
+        return tickets;
     }
 
     public async Task<TicketDto?> Ticket(
         Guid id,
-        [Service] ITicketService ticketService)
+        [Service] ITicketService ticketService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
-        return await ticketService.GetTicketByIdAsync(id);
+        // P0-WS1 (MISSING-AUTH, Chain #1): a single ticket is readable by its owner or by
+        // staff. Non-owner staff reads do NOT expose the raw QR door token.
+        var callerUserId = Mutation.RequireAuthentication(httpContextAccessor);
+        var role = Mutation.GetCurrentRole(httpContextAccessor);
+        var isManager = role == "Admin" || role == "CoAdmin";
+
+        var ticket = await ticketService.GetTicketByIdAsync(id);
+        if (ticket == null) return null;
+
+        if (ticket.UserId != callerUserId && !isManager)
+            throw new GraphQLException("Access denied.");
+
+        // Only the owner sees the live door token; staff see the ticket without the QR.
+        if (ticket.UserId != callerUserId)
+            ticket.QRCode = string.Empty;
+
+        return ticket;
     }
 
     // Genres
@@ -740,15 +975,21 @@ public class Query
 
     // Contact messages
     public async Task<IEnumerable<ContactMessageReadDto>> ContactMessages(
-        [Service] IContactMessageService contactMessageService)
+        [Service] IContactMessageService contactMessageService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (table dump): Admin/CoAdmin only.
+        Mutation.RequireCoAdmin(httpContextAccessor);
         return await contactMessageService.GetAllAsync();
     }
 
     // Newsletter subscriptions
     public async Task<IEnumerable<NewsletterDto>> Newsletters(
-        [Service] INewsletterService newsletterService)
+        [Service] INewsletterService newsletterService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (table dump): Admin/CoAdmin only.
+        Mutation.RequireCoAdmin(httpContextAccessor);
         return await newsletterService.GetAllAsync();
     }
 
@@ -818,8 +1059,11 @@ public class Query
 
     public async Task<IEnumerable<GalleryMediaDto>> GalleryMediaByUser(
         string userId,
-        [Service] IGalleryMediaService galleryMediaService)
+        [Service] IGalleryMediaService galleryMediaService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (MISSING-AUTH): owner-or-admin read.
+        Mutation.RequireSelfOrAdmin(httpContextAccessor, userId);
         return await galleryMediaService.GetByUserAsync(userId);
     }
 
@@ -846,8 +1090,13 @@ public class Query
     // User profile query
     public async Task<UserDetailsDto?> UserById(
         string userId,
-        [Service] IUserService userService)
+        [Service] IUserService userService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (MISSING-AUTH, Chain #2): returns another user's email — restrict to self
+        // or Admin (default deny). A public-safe profile projection is a separate, deferred
+        // decision flagged in the P0 plan.
+        Mutation.RequireSelfOrAdmin(httpContextAccessor, userId);
         return await userService.GetUserByIdAsync(userId);
     }
 
@@ -953,17 +1202,29 @@ public class Query
     // Fetch song metadata from Spotify/SoundCloud oEmbed
     public async Task<SongMetadataResult> FetchSongMetadata(
         string url,
-        [Service] IHttpClientFactory httpClientFactory)
+        [Service] IHttpClientFactory httpClientFactory,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // WSx SSRF hardening: (1) require auth — no anonymous caller can drive a server-side fetch;
+        // (2) strict EXACT-host allowlist + https via OEmbedHostValidator (replaces the bypassable
+        // url.Contains() gate); (3) the "oembed" client is configured AllowAutoRedirect=false so the
+        // oEmbed endpoint cannot 30x-redirect us into an attacker-controlled fetch. Reflected fields
+        // remain subject to the WS3B safeHttpUrl render guard + server-side URL allowlist on save.
+        Mutation.RequireAuthentication(httpContextAccessor);
+
         if (string.IsNullOrWhiteSpace(url))
             throw new GraphQLException("URL is required.");
 
-        var client = httpClientFactory.CreateClient();
+        var provider = DJDiP.Application.Common.OEmbedHostValidator.Resolve(url);
+        if (provider == DJDiP.Application.Common.OEmbedProvider.None)
+            throw new GraphQLException("URL must be a Spotify or SoundCloud link.");
+
+        var client = httpClientFactory.CreateClient("oembed"); // AllowAutoRedirect=false (DI-configured)
         client.Timeout = TimeSpan.FromSeconds(10);
 
         try
         {
-            if (url.Contains("spotify.com", StringComparison.OrdinalIgnoreCase))
+            if (provider == DJDiP.Application.Common.OEmbedProvider.Spotify)
             {
                 var oembedUrl = $"https://open.spotify.com/oembed?url={Uri.EscapeDataString(url)}";
                 var response = await client.GetStringAsync(oembedUrl);
@@ -987,7 +1248,7 @@ public class Query
                     SoundCloudUrl = null
                 };
             }
-            else if (url.Contains("soundcloud.com", StringComparison.OrdinalIgnoreCase))
+            else // SoundCloud
             {
                 var oembedUrl = $"https://soundcloud.com/oembed?format=json&url={Uri.EscapeDataString(url)}";
                 var response = await client.GetStringAsync(oembedUrl);
@@ -1006,10 +1267,6 @@ public class Query
                     SpotifyUrl = null,
                     SoundCloudUrl = url
                 };
-            }
-            else
-            {
-                throw new GraphQLException("URL must be a Spotify or SoundCloud link.");
             }
         }
         catch (HttpRequestException)
@@ -1039,8 +1296,11 @@ public class Query
     // Event Organizer Applications
     public async Task<OrganizerApplicationDto?> OrganizerApplicationByUser(
         string userId,
-        [Service] AppDbContext db)
+        [Service] AppDbContext db,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (MISSING-AUTH): owner-or-admin read.
+        Mutation.RequireSelfOrAdmin(httpContextAccessor, userId);
         var app = await db.EventOrganizerApplications
             .Where(a => a.UserId == userId)
             .OrderByDescending(a => a.SubmittedAt)
@@ -1458,7 +1718,7 @@ public class Mutation
         return userId;
     }
 
-    private static string RequireCoAdmin(IHttpContextAccessor accessor)
+    internal static string RequireCoAdmin(IHttpContextAccessor accessor)
     {
         var userId = RequireAuthentication(accessor);
         var role = accessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
@@ -1479,6 +1739,21 @@ public class Mutation
     internal static string? GetCurrentRole(IHttpContextAccessor accessor)
     {
         return accessor.HttpContext?.User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+    }
+
+    // P0-WS1: owner-or-manager guard for user-scoped reads (mirrors MyOrganizerEvents).
+    // Requires auth, then allows only the caller themselves or a manager (Admin or CoAdmin —
+    // CoAdmin is the codebase's staff/management tier, used by every RequireCoAdmin gate, so
+    // it must read user-scoped data too; Admin-only here would lock CoAdmins out of support
+    // views they can already reach via the attendee list and table dumps). Returns the
+    // caller's userId. Throws GraphQLException on violation.
+    internal static string RequireSelfOrAdmin(IHttpContextAccessor accessor, string targetUserId)
+    {
+        var callerUserId = RequireAuthentication(accessor);
+        var role = GetCurrentRole(accessor);
+        if (role != "Admin" && role != "CoAdmin" && callerUserId != targetUserId)
+            throw new GraphQLException("Access denied.");
+        return callerUserId;
     }
 
     private async Task RequireDjProfileOwnerOrManager(
@@ -1540,11 +1815,48 @@ public class Mutation
         return userId;
     }
 
+    // P0-WS3B — reject a non-http(s) (javascript:/data:/etc.) URL on write. Optional fields:
+    // empty/null passes; a non-empty value must be an absolute http/https URL. Throws a clean
+    // GraphQLException the FE surfaces inline. Apply on every user-supplied URL field that later
+    // renders into an <a href> (or, defensively, image) sink.
+    internal static void ValidateOptionalUrl(string? url, string fieldName)
+    {
+        if (!UrlSchemeValidator.IsSafeOrEmpty(url))
+            throw new GraphQLException($"{fieldName} must be a valid http(s) URL.");
+    }
+
     // AUTH MUTATIONS
+    //
+    // P0-WS3B: on login/register success we set the HttpOnly klubn_rt (refresh JWT) + non-HttpOnly
+    // klubn_csrf cookies via the HttpResponse, and BLANK the body refreshToken (keeping the
+    // AuthPayload schema shape) so no usable refresh token is ever readable by page JS. The
+    // accessToken stays in the body — the frozen e2e baseline + the SPA's in-memory store read it
+    // there. This helper centralizes that so Login and Register behave identically.
+    internal static void IssueSessionCookies(
+        AuthPayload payload,
+        IHttpContextAccessor accessor,
+        IRefreshTokenService refreshTokens,
+        IWebHostEnvironment env)
+    {
+        var response = accessor.HttpContext?.Response;
+        if (response != null)
+        {
+            var refreshJwt = refreshTokens.IssueRefreshToken(payload.User.Id);
+            var csrf = refreshTokens.GenerateCsrfToken();
+            DJDiP.API.Controllers.AuthCookies.SetAuthCookies(
+                response, refreshJwt, csrf, env.IsDevelopment(), refreshTokens.RefreshTokenDays);
+        }
+        // Never return a usable refresh token in the GraphQL body (schema shape preserved).
+        payload.RefreshToken = string.Empty;
+    }
+
     public async Task<AuthPayload> Register(
         RegisterInput input,
         [Service] IAuthService authService,
-        [Service] IEmailService emailService)
+        [Service] IEmailService emailService,
+        [Service] IRefreshTokenService refreshTokens,
+        [Service] IHttpContextAccessor httpContextAccessor,
+        [Service] IWebHostEnvironment env)
     {
         if (string.IsNullOrWhiteSpace(input.FullName))
             throw new GraphQLException("Full name is required.");
@@ -1555,10 +1867,17 @@ public class Mutation
 
         try
         {
-            var result = await authService.RegisterAsync(input.FullName.Trim(), input.Email.Trim().ToLowerInvariant(), input.Password);
+            var result = await authService.RegisterAsync(
+                input.FullName.Trim(),
+                input.Email.Trim().ToLowerInvariant(),
+                input.Password,
+                input.AcceptTerms,
+                input.MarketingOptIn ?? false,
+                input.MarketingPurpose);
 
             _ = emailService.SendWelcomeEmailAsync(input.Email.Trim(), input.FullName.Trim());
 
+            IssueSessionCookies(result, httpContextAccessor, refreshTokens, env);
             return result;
         }
         catch (InvalidOperationException ex)
@@ -1579,7 +1898,10 @@ public class Mutation
 
     public async Task<AuthPayload> Login(
         LoginInput input,
-        [Service] IAuthService authService)
+        [Service] IAuthService authService,
+        [Service] IRefreshTokenService refreshTokens,
+        [Service] IHttpContextAccessor httpContextAccessor,
+        [Service] IWebHostEnvironment env)
     {
         if (string.IsNullOrWhiteSpace(input.Email))
             throw new GraphQLException("Email is required.");
@@ -1588,7 +1910,9 @@ public class Mutation
 
         try
         {
-            return await authService.LoginAsync(input.Email.Trim().ToLowerInvariant(), input.Password);
+            var result = await authService.LoginAsync(input.Email.Trim().ToLowerInvariant(), input.Password);
+            IssueSessionCookies(result, httpContextAccessor, refreshTokens, env);
+            return result;
         }
         catch (InvalidOperationException ex)
         {
@@ -1863,6 +2187,10 @@ public class Mutation
         if (errors.Count > 0)
             throw new GraphQLException(string.Join(" ", errors));
 
+        // P0-WS3B — scheme allowlist on the profile URL fields (rendered into href/img sinks).
+        ValidateOptionalUrl(input.ProfilePictureUrl, "Profile picture URL");
+        ValidateOptionalUrl(input.CoverImageUrl, "Cover image URL");
+
         var resolvedUserId = string.IsNullOrWhiteSpace(input.UserId) ? adminUserId : input.UserId;
 
         var dto = new CreateDJProfileDto
@@ -1909,6 +2237,9 @@ public class Mutation
     {
         RequireRole(httpContextAccessor, "DJ", "Admin", "CoAdmin");
         await RequireDjProfileOwnerOrManager(id, httpContextAccessor, unitOfWork);
+        // P0-WS3B — scheme allowlist on the profile URL fields.
+        ValidateOptionalUrl(input.ProfilePictureUrl, "Profile picture URL");
+        ValidateOptionalUrl(input.CoverImageUrl, "Cover image URL");
         var dto = new UpdateDJProfileDto
         {
             Id = id,
@@ -1962,12 +2293,17 @@ public class Mutation
         [Service] IEmailService emailService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAuthentication(httpContextAccessor);
+        // P0-WS1 (TRUSTS-CLIENT-IDENTITY): the applicant is the JWT principal, never
+        // input.UserId (kept on the input for schema compatibility but ignored).
+        var callerUserId = RequireAuthentication(httpContextAccessor);
+        // P0-WS3B — scheme allowlist on the application's URL fields.
+        ValidateOptionalUrl(input.ProfileImageUrl, "Profile image URL");
+        ValidateOptionalUrl(input.CoverImageUrl, "Cover image URL");
         try
         {
             var dto = new CreateDJApplicationDto
             {
-                UserId = input.UserId,
+                UserId = callerUserId,
                 StageName = input.StageName,
                 Bio = input.Bio,
                 Genre = input.Genre,
@@ -1983,7 +2319,7 @@ public class Mutation
             var result = await djApplicationService.SubmitApplicationAsync(dto);
 
             // Send confirmation email to applicant
-            var applicant = await userService.GetUserByIdAsync(input.UserId);
+            var applicant = await userService.GetUserByIdAsync(callerUserId);
             if (applicant != null)
             {
                 _ = emailService.SendDJApplicationSubmittedAsync(
@@ -2009,9 +2345,10 @@ public class Mutation
         [Service] IDJApplicationService djApplicationService,
         [Service] IUserService userService,
         [Service] IEmailService emailService,
+        [Service] IAuditLogService auditLog,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireCoAdmin(httpContextAccessor);
+        var actorId = RequireCoAdmin(httpContextAccessor);
         try
         {
             var dto = new UpdateApplicationStatusDto
@@ -2022,6 +2359,17 @@ public class Mutation
             };
 
             var result = await djApplicationService.ApproveApplicationAsync(dto);
+
+            // P0-WS2 (audit): one attributable row per SUCCESSFUL decision, AFTER the service
+            // commit. Actor is the JWT-derived reviewer (actorId from the guard).
+            await auditLog.RecordAsync(new CreateAuditLogDTO
+            {
+                Action = "DJAppDecision",
+                EntityName = "DJApplication",
+                EntityId = applicationId.ToString(),
+                UserId = actorId,
+                Changes = JsonSerializer.Serialize(new { applicationId, decision = "approved" })
+            });
 
             // Send approval email
             var applicant = await userService.GetUserByIdAsync(result.UserId);
@@ -2051,9 +2399,10 @@ public class Mutation
         [Service] IDJApplicationService djApplicationService,
         [Service] IUserService userService,
         [Service] IEmailService emailService,
+        [Service] IAuditLogService auditLog,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireCoAdmin(httpContextAccessor);
+        var actorId = RequireCoAdmin(httpContextAccessor);
         try
         {
             var dto = new UpdateApplicationStatusDto
@@ -2065,6 +2414,17 @@ public class Mutation
             };
 
             var result = await djApplicationService.RejectApplicationAsync(dto);
+
+            // P0-WS2 (audit): one attributable row per SUCCESSFUL decision, AFTER the service
+            // commit. Actor is the JWT-derived reviewer (actorId from the guard).
+            await auditLog.RecordAsync(new CreateAuditLogDTO
+            {
+                Action = "DJAppDecision",
+                EntityName = "DJApplication",
+                EntityId = applicationId.ToString(),
+                UserId = actorId,
+                Changes = JsonSerializer.Serialize(new { applicationId, decision = "rejected", reason = rejectionReason })
+            });
 
             // Send rejection email
             var applicant = await userService.GetUserByIdAsync(result.UserId);
@@ -2094,6 +2454,8 @@ public class Mutation
         [Service] IHttpContextAccessor httpContextAccessor)
     {
         var userId = RequireAuthentication(httpContextAccessor);
+        // P0-WS3B — website renders into the admin review page's <a href>; scheme-allowlist it.
+        ValidateOptionalUrl(input.Website, "Website");
         var existing = await db.EventOrganizerApplications
             .Where(a => a.UserId == userId && a.Status == ApplicationStatus.Pending)
             .FirstOrDefaultAsync();
@@ -2119,6 +2481,7 @@ public class Mutation
     public async Task<OrganizerApplicationDto> ApproveOrganizerApplication(
         Guid applicationId,
         [Service] AppDbContext db,
+        [Service] IAuditLogService auditLog,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
         var adminId = RequireAdmin(httpContextAccessor);
@@ -2134,6 +2497,15 @@ public class Mutation
         if (user != null) user.Role = 3;
 
         await db.SaveChangesAsync();
+        // P0-WS2 (audit): one attributable row per SUCCESSFUL decision, AFTER SaveChanges.
+        await auditLog.RecordAsync(new CreateAuditLogDTO
+        {
+            Action = "OrganizerAppDecision",
+            EntityName = "EventOrganizerApplication",
+            EntityId = applicationId.ToString(),
+            UserId = adminId,
+            Changes = JsonSerializer.Serialize(new { applicationId, decision = "approved" })
+        });
         return OrganizerApplicationDto.From(app);
     }
 
@@ -2141,6 +2513,7 @@ public class Mutation
         Guid applicationId,
         string? rejectionReason,
         [Service] AppDbContext db,
+        [Service] IAuditLogService auditLog,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
         var adminId = RequireAdmin(httpContextAccessor);
@@ -2153,6 +2526,15 @@ public class Mutation
         app.RejectionReason = rejectionReason;
 
         await db.SaveChangesAsync();
+        // P0-WS2 (audit): one attributable row per SUCCESSFUL decision, AFTER SaveChanges.
+        await auditLog.RecordAsync(new CreateAuditLogDTO
+        {
+            Action = "OrganizerAppDecision",
+            EntityName = "EventOrganizerApplication",
+            EntityId = applicationId.ToString(),
+            UserId = adminId,
+            Changes = JsonSerializer.Serialize(new { applicationId, decision = "rejected", reason = rejectionReason })
+        });
         return OrganizerApplicationDto.From(app);
     }
 
@@ -2257,19 +2639,25 @@ public class Mutation
         CreateContactMessageInput input,
         [Service] IContactMessageService contactMessages,
         [Service] IUserService userService,
-        [Service] IEmailService emailService)
+        [Service] IEmailService emailService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (MISSING-AUTH + TRUSTS-CLIENT-IDENTITY): the sender is the JWT principal,
+        // never input.UserId. NOTE (product tradeoff flagged in the P0 plan): this makes the
+        // public contact form require login. input.UserId is kept on the input for schema
+        // compatibility but ignored server-side.
+        var callerUserId = RequireAuthentication(httpContextAccessor);
         var dto = new ContactMessageCreateDto
         {
             Message = input.Message,
-            UserId = input.UserId
+            UserId = callerUserId
         };
 
         var result = await contactMessages.CreateAsync(dto);
 
-        // Send emails - look up user for name/email
-        var user = await userService.GetUserByIdAsync(input.UserId);
-        var senderEmail = user?.Email ?? input.UserId; // UserId may be an email for non-logged-in users
+        // Send emails - look up the authenticated sender for name/email
+        var user = await userService.GetUserByIdAsync(callerUserId);
+        var senderEmail = user?.Email ?? callerUserId;
         var senderName = user?.FullName ?? "Website Visitor";
 
         _ = emailService.SendContactConfirmationAsync(senderEmail, senderName);
@@ -2294,12 +2682,18 @@ public class Mutation
     public async Task<NewsletterDto> SubscribeNewsletter(
         CreateNewsletterInput input,
         [Service] INewsletterService newsletters,
-        [Service] IEmailService emailService)
+        [Service] IEmailService emailService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
+        // P0-WS1 (MISSING-AUTH + TRUSTS-CLIENT-IDENTITY): the subscriber is the JWT
+        // principal, never input.UserId. NOTE (product tradeoff flagged in the P0 plan):
+        // this makes the public newsletter form require login. input.UserId is kept on the
+        // input for schema compatibility but ignored server-side.
+        var callerUserId = RequireAuthentication(httpContextAccessor);
         var dto = new CreateNewsletterDto
         {
             Email = input.Email,
-            UserId = input.UserId
+            UserId = callerUserId
         };
 
         var result = await newsletters.SubscribeAsync(dto);
@@ -2359,6 +2753,11 @@ public class Mutation
         if (string.IsNullOrWhiteSpace(input.Artist) && !hasUrl)
             throw new GraphQLException("Artist is required (or provide a URL).");
 
+        // P0-WS3B — scheme allowlist on the song URL fields (spotify/soundcloud render into <a href>).
+        ValidateOptionalUrl(input.CoverImageUrl, "Cover image URL");
+        ValidateOptionalUrl(input.SpotifyUrl, "Spotify URL");
+        ValidateOptionalUrl(input.SoundCloudUrl, "SoundCloud URL");
+
         var dto = new CreateSongDto
         {
             Title = input.Title,
@@ -2416,6 +2815,10 @@ public class Mutation
         if (string.IsNullOrWhiteSpace(input.Title))
             throw new GraphQLException("Playlist title is required.");
 
+        // P0-WS3B — scheme allowlist on the playlist URL fields (playlistUrl renders into <a href>).
+        ValidateOptionalUrl(input.CoverImageUrl, "Cover image URL");
+        ValidateOptionalUrl(input.PlaylistUrl, "Playlist URL");
+
         Guid? djProfileId = input.DjProfileId;
 
         // If DJ (not admin/coadmin), verify they own the DJ profile
@@ -2452,6 +2855,9 @@ public class Mutation
         [Service] IUnitOfWork unitOfWork)
     {
         await RequirePlaylistOwnerOrAdmin(id, playlistService, httpContextAccessor, unitOfWork);
+        // P0-WS3B — scheme allowlist on the playlist URL fields.
+        ValidateOptionalUrl(input.CoverImageUrl, "Cover image URL");
+        ValidateOptionalUrl(input.PlaylistUrl, "Playlist URL");
         var dto = new UpdatePlaylistDto
         {
             Title = input.Title,
@@ -2605,6 +3011,23 @@ public class Mutation
         [Service] IHttpContextAccessor httpContextAccessor)
     {
         RequireAdmin(httpContextAccessor);
+        // P0-WS3B — scheme allowlist on every site-settings URL field. These flow into Footer /
+        // ContactPage / LandingPage <a href> and image sinks. All optional; empty passes.
+        ValidateOptionalUrl(input.LogoUrl, "Logo URL");
+        ValidateOptionalUrl(input.FaviconUrl, "Favicon URL");
+        ValidateOptionalUrl(input.HeroCtaLink, "Hero CTA link");
+        ValidateOptionalUrl(input.HeroBackgroundImageUrl, "Hero background image URL");
+        ValidateOptionalUrl(input.HeroBackgroundVideoUrl, "Hero background video URL");
+        ValidateOptionalUrl(input.GalleryVideoUrl, "Gallery video URL");
+        ValidateOptionalUrl(input.FacebookUrl, "Facebook URL");
+        ValidateOptionalUrl(input.InstagramUrl, "Instagram URL");
+        ValidateOptionalUrl(input.TwitterUrl, "Twitter URL");
+        ValidateOptionalUrl(input.YouTubeUrl, "YouTube URL");
+        ValidateOptionalUrl(input.TikTokUrl, "TikTok URL");
+        ValidateOptionalUrl(input.SoundCloudUrl, "SoundCloud URL");
+        ValidateOptionalUrl(input.DefaultEventImageUrl, "Default event image URL");
+        ValidateOptionalUrl(input.DefaultDjImageUrl, "Default DJ image URL");
+        ValidateOptionalUrl(input.DefaultVenueImageUrl, "Default venue image URL");
         try
         {
         var dto = new UpdateSiteSettingsDto
@@ -2703,9 +3126,10 @@ public class Mutation
         Guid id,
         UpdateGalleryMediaInput input,
         [Service] IGalleryMediaService galleryMediaService,
+        [Service] IAuditLogService auditLog,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireCoAdmin(httpContextAccessor);
+        var actorId = RequireCoAdmin(httpContextAccessor);
         var dto = new UpdateGalleryMediaDto
         {
             Title = input.Title,
@@ -2715,7 +3139,26 @@ public class Mutation
             Tags = input.Tags
         };
 
-        return await galleryMediaService.UpdateAsync(id, dto);
+        var ok = await galleryMediaService.UpdateAsync(id, dto);
+        // P0-WS2 (audit): one attributable row per SUCCESSFUL moderation action only —
+        // UpdateAsync returns false for a non-existent item, which writes nothing.
+        if (ok)
+        {
+            await auditLog.RecordAsync(new CreateAuditLogDTO
+            {
+                Action = "GalleryModeration",
+                EntityName = "GalleryMedia",
+                EntityId = id.ToString(),
+                UserId = actorId,
+                Changes = JsonSerializer.Serialize(new
+                {
+                    mediaId = id,
+                    isApproved = input.IsApproved,
+                    isFeatured = input.IsFeatured
+                })
+            });
+        }
+        return ok;
     }
 
     public async Task<bool> DeleteGalleryMedia(
@@ -2786,8 +3229,10 @@ public class Mutation
         [Service] IFollowService followService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAuthentication(httpContextAccessor);
-        await followService.FollowDjAsync(input.UserId, input.DjId);
+        // P0-WS1 (TRUSTS-CLIENT-IDENTITY): the follower is the JWT principal, never
+        // input.UserId. The field is kept on the input for schema compatibility but ignored.
+        var callerUserId = RequireAuthentication(httpContextAccessor);
+        await followService.FollowDjAsync(callerUserId, input.DjId);
         return true;
     }
 
@@ -2796,8 +3241,10 @@ public class Mutation
         [Service] IFollowService followService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAuthentication(httpContextAccessor);
-        await followService.UnfollowDjAsync(input.UserId, input.DjId);
+        // P0-WS1 (TRUSTS-CLIENT-IDENTITY): the unfollow actor is the JWT principal,
+        // never input.UserId (kept on the input for schema compatibility but ignored).
+        var callerUserId = RequireAuthentication(httpContextAccessor);
+        await followService.UnfollowDjAsync(callerUserId, input.DjId);
         return true;
     }
 
@@ -2858,13 +3305,23 @@ public class Mutation
         [Service] ITicketService ticketService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAuthentication(httpContextAccessor);
+        var callerUserId = RequireAuthentication(httpContextAccessor);
+        var role = GetCurrentRole(httpContextAccessor);
         var dto = new CancelTicketDto
         {
             TicketId = input.TicketId,
-            Reason = input.Reason
+            Reason = input.Reason,
+            ActingUserId = callerUserId,
+            IsManager = role == "Admin" || role == "CoAdmin"
         };
-        return await ticketService.CancelTicketAsync(dto);
+        try
+        {
+            return await ticketService.CancelTicketAsync(dto);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new GraphQLException(ex.Message);
+        }
     }
 
     public async Task<TicketDto?> RefundTicket(
@@ -2872,11 +3329,12 @@ public class Mutation
         [Service] ITicketService ticketService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireCoAdmin(httpContextAccessor);
+        var actorId = RequireCoAdmin(httpContextAccessor);
         var dto = new RefundTicketDto
         {
             TicketId = input.TicketId,
-            PaymentMethod = input.PaymentMethod
+            PaymentMethod = input.PaymentMethod,
+            ActingUserId = actorId
         };
         return await ticketService.RefundTicketAsync(dto);
     }
@@ -2886,14 +3344,24 @@ public class Mutation
         [Service] ITicketService ticketService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAuthentication(httpContextAccessor);
+        var callerUserId = RequireAuthentication(httpContextAccessor);
+        var role = GetCurrentRole(httpContextAccessor);
         var dto = new TransferTicketDto
         {
             TicketId = input.TicketId,
             ToUserId = input.ToUserId,
-            ToEmail = input.ToEmail
+            ToEmail = input.ToEmail,
+            ActingUserId = callerUserId,
+            IsManager = role == "Admin" || role == "CoAdmin"
         };
-        return await ticketService.TransferTicketAsync(dto);
+        try
+        {
+            return await ticketService.TransferTicketAsync(dto);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new GraphQLException(ex.Message);
+        }
     }
 
     public async Task<bool> InvalidateTicket(
@@ -3072,30 +3540,53 @@ public class Mutation
     public async Task<bool> UpdateUserRole(
         string userId,
         int role,
-        [Service] AppDbContext db,
+        [Service] IUserService userService,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAdmin(httpContextAccessor);
+        var actorId = RequireAdmin(httpContextAccessor);
         if (role < 0 || role > 4)
             throw new GraphQLException("Invalid role value.");
-        var user = await db.ApplicationUsers.FirstOrDefaultAsync(u => u.Id == userId);
-        if (user == null) throw new GraphQLException("User not found.");
-        user.Role = role;
-        user.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync();
+        // P0-WS2 (audit): role change + attributable audit row are written in the service
+        // (unit-testable). actorId is the JWT-derived admin id from the guard, never input.
+        var ok = await userService.ChangeRoleAsync(actorId, userId, role);
+        if (!ok) throw new GraphQLException("User not found.");
         return true;
     }
 
     public async Task<bool> DeleteUser(
         string userId,
-        [Service] AppDbContext db,
+        [Service] IUserService userService,
+        [Service] IAuditLogService auditLog,
         [Service] IHttpContextAccessor httpContextAccessor)
     {
-        RequireAdmin(httpContextAccessor);
-        var user = await db.ApplicationUsers.FirstOrDefaultAsync(u => u.Id == userId);
-        if (user == null) throw new GraphQLException("User not found.");
-        db.ApplicationUsers.Remove(user);
-        await db.SaveChangesAsync();
+        var actorId = RequireAdmin(httpContextAccessor);
+        // P0-WS3C (GDPR): admin "delete" now ANONYMIZES (never hard-deletes) so financial/
+        // ticketing rows are retained under a pseudonymized key (Bokføringsloven). The frozen
+        // WS2 RequireAdmin gate + "UserDelete" audit row are preserved; only the data mechanics
+        // changed (AnonymizeUserAsync ALSO writes its own "UserErasure" row — both are kept).
+        var ok = await userService.AnonymizeUserAsync(actorId, userId);
+        if (!ok) throw new GraphQLException("User not found.");
+        // WS2 (frozen): keep the existing attributable "UserDelete" admin-action audit row.
+        await auditLog.RecordAsync(new CreateAuditLogDTO
+        {
+            Action = "UserDelete",
+            EntityName = "ApplicationUser",
+            EntityId = userId,
+            UserId = actorId,
+            Changes = JsonSerializer.Serialize(new { targetUserId = userId })
+        });
+        return true;
+    }
+
+    // P0-WS3C (GDPR Art. 17) — self-service erasure. Self-only: actor == target == the JWT id
+    // (RequireAuthentication). Anonymizes the caller's own identity; financial rows are retained.
+    public async Task<bool> RequestErasure(
+        [Service] IUserService userService,
+        [Service] IHttpContextAccessor httpContextAccessor)
+    {
+        var callerId = RequireAuthentication(httpContextAccessor);
+        var ok = await userService.AnonymizeUserAsync(callerId, callerId);
+        if (!ok) throw new GraphQLException("User not found.");
         return true;
     }
 }
@@ -3113,6 +3604,13 @@ public class RegisterInput
     public string FullName { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
+
+    // P0-WS3C (GDPR) — consent at signup. AcceptTerms is REQUIRED (server-enforced in
+    // AuthService.RegisterAsync; no bypass). MarketingOptIn is a SEPARATE, optional, explicit
+    // opt-in — never bundled with terms. MarketingPurpose is an optional purpose label.
+    public bool AcceptTerms { get; set; } = false;
+    public bool? MarketingOptIn { get; set; }
+    public string? MarketingPurpose { get; set; }
 }
 
 public class LoginInput

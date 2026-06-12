@@ -207,11 +207,15 @@ def uniq(prefix: str = "") -> str:
 
 
 def register_user(prefix: str = "e2e"):
-    """Register a fresh user, return (access_token, user_id, email)."""
+    """Register a fresh user, return (access_token, user_id, email).
+
+    WS3C: terms acceptance is now REQUIRED at signup (server-enforced), so every register
+    must send acceptTerms:true. marketingOptIn:false is sent explicitly (separate consent)."""
     email = f"{prefix}-{uuid.uuid4().hex[:8]}@test.local"
     r = gql("""mutation($i: RegisterInput!) {
       register(input: $i) { accessToken user { id email } } }""",
-            {"i": {"fullName": "E2E Tester", "email": email, "password": "E2e!TestPass123"}})
+            {"i": {"fullName": "E2E Tester", "email": email, "password": "E2e!TestPass123",
+                   "acceptTerms": True, "marketingOptIn": False}})
     data = (r.get("data") or {}).get("register") or {}
     tok = data.get("accessToken")
     if not tok:

@@ -1,3 +1,4 @@
+using DJDiP.Application.Common;
 using DJDiP.Application.DTO.PaymentDTO;
 using DJDiP.Application.Interfaces;
 using DJDiP.Application.Options;
@@ -113,7 +114,7 @@ namespace DJDiP.Application.Services
                     await _unitOfWork.Tickets.SaveChangesAsync();
                 }
 
-                _log.LogInformation("OrderConfirmation: confirmation email queued for order {Reference} to {Email}.", order.Reference, toEmail);
+                _log.LogInformation("OrderConfirmation: confirmation email queued for order {Reference} to {Email}.", order.Reference, PiiMasker.MaskEmail(toEmail));
             }
             catch (Exception ex)
             {

@@ -3,6 +3,7 @@ namespace DJDiP.Infrastructure.Persistance
 {
     using Microsoft.EntityFrameworkCore;
     using DJDiP.Domain.Models;
+    using DJDiP.Domain.Models.AdmnModels;
 
     public class AppDbContext : DbContext
     {
@@ -35,6 +36,7 @@ namespace DJDiP.Infrastructure.Persistance
         public DbSet<TicketType> TicketTypes => Set<TicketType>();
         public DbSet<TicketHold> TicketHolds => Set<TicketHold>();
         public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
+        public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
         // Phase 2-4 Entities
         public DbSet<Badge> Badges => Set<Badge>();
@@ -137,10 +139,16 @@ namespace DJDiP.Infrastructure.Persistance
                 .OnDelete(DeleteBehavior.Restrict);
 
         // Ticket
+        // P0-WS3C (GDPR): User→Ticket is Restrict, not the default Cascade — erasure
+        // ANONYMIZES the user row (never deletes it) so financial/ticketing rows survive
+        // under a pseudonymized key (Bokføringsloven retention). Belt-and-braces: a hard
+        // user delete must never cascade away issued tickets. (Order/ContactMessage/
+        // Notification are already Restrict above.)
         modelBuilder.Entity<Ticket>()
             .HasOne(t => t.User)
             .WithMany(u => u.Tickets)
-            .HasForeignKey(t => t.UserId);
+            .HasForeignKey(t => t.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<Ticket>()
             .HasOne(t => t.Event)
@@ -461,6 +469,15 @@ namespace DJDiP.Infrastructure.Persistance
             // Landing carousel read path: published highlights ordered by SortOrder.
             modelBuilder.Entity<EventHighlight>()
                 .HasIndex(h => new { h.IsPublished, h.SortOrder });
+
+            // AuditLog (WS2 / TM-1) — append-only privileged-action trail. Indexes serve the
+            // Admin read path: by target resource, by actor, and by time (recent-first).
+            modelBuilder.Entity<AuditLog>()
+                .HasIndex(a => new { a.EntityName, a.EntityId });
+            modelBuilder.Entity<AuditLog>()
+                .HasIndex(a => a.UserId);
+            modelBuilder.Entity<AuditLog>()
+                .HasIndex(a => a.Timestamp);
 
             base.OnModelCreating(modelBuilder);
         }

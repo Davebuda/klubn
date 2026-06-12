@@ -19,6 +19,8 @@ Standard library only (Python 3.9+): `urllib` + `sqlite3`. No pip installs.
 | `checkout_retry.py` | Multi-attempt: Failed webhook releases holds + promo + cancels order; retry creates `AttemptNo=2` `{ref}-r2`, re-reserves; attempt-2 capture issues once; retry-on-paid rejected. Plus **zero-total** (100% promo) issues immediately with a return-page redirect and a Captured-0 payment. |
 | `checkout_hostile.py` | Oversell / expired-promo / hidden-tier-without-unlock / unknown-provider / wrong-owner-retry all fail cleanly and leave **no partial state**; 5 quotes write nothing. |
 | `checkout_hidden_reveal.py` | Hidden-tier reveal via `ticketTypes(unlockCode)`: no/bogus/non-unlock code excludes the hidden tier (anti-oracle, no error), a valid `UnlocksHiddenTypes` code reveals it with `isUnlocked=true`, the reveal reads write **zero Orders**, and the revealed tier flows quote → create → signed-webhook capture → one issued ticket. |
+| `gdpr_rights.py` | **P0-WS3C GDPR operationalization.** `signup_requires_consent` (register without `acceptTerms` → rejected + no user row; with → ok and the `ApplicationUsers` row carries `TermsAcceptedAt`+`TermsVersion`; `marketingOptIn` stamped separately). `self_export_owner_scoped` (`exportMyData` is JWT-scoped, no id arg → returns the caller's own profile/tickets/orders; anonymous → denied). `erasure_anonymizes_keeps_payments` (seed user + Order + Payment + Ticket via direct INSERT; `requestErasure` → user Email anonymized to `anonymized+…@deleted.invalid` AND the Order/Payment/Ticket rows still exist; a `UserErasure` audit row with actor==target). `non_admin_cannot_export_others` (B's export is B's data only — never A's). **Run against a FRESH DB with `ASPNETCORE_ENVIRONMENT=Staging --no-launch-profile`** (like `dos_limits.py`). |
+| `authz_resolvers.py` | **P0-WS1 authz boundary** (the 14 broken resolvers). IDOR: user B cancel/transfer of A's ticket → denied + DB unchanged (Status/UserId/QR). Owner-or-admin reads (`userById`, `ticketsByUser`, `followedDjs`, `djApplicationByUser`, `galleryMediaByUser`, `organizerApplicationByUser`): anonymous → denied, cross-user → denied, owner → ok. `ticket(id)` owner-sees-QR / non-owner-denied (Chain #1); `ticketsByEvent` anonymous/non-staff denied + no `qRCode` leak. Table dumps (`djApplications`, `pendingDjApplications`, `contactMessages`, `newsletters`) anonymous → denied. Identity mutations (`followDj`, `createContactMessage`, `subscribeNewsletter`, `submitDJApplication`) anonymous → denied and `input.userId` never trusted. **Seeds Active tickets via direct INSERT** (no public ticket-issuance mutation for this path). |
 
 All scripts share `_harness.py` (config, `gql()`/`rest()`/`webhook()`/`sign()`/`db()`,
 a PASS/FAIL `Ledger`, and `seed_ticket_type()` / `seed_promo()` fixtures). Each prints a
@@ -63,7 +65,14 @@ python checkout_exactly_once.py
 python checkout_retry.py
 python checkout_hostile.py
 python checkout_hidden_reveal.py
+python authz_resolvers.py    # P0-WS1 authz boundary (anonymous-denied + cross-user-denied + owner-allowed)
+python gdpr_rights.py        # P0-WS3C GDPR (consent-at-signup + owner-scoped export + anonymize-keeps-payments)
 ```
+
+> **`gdpr_rights.py` requires `ASPNETCORE_ENVIRONMENT=Staging` + `--no-launch-profile`** so the
+> consent-required signup path runs exactly as it does outside Development (same convention as
+> `dos_limits.py`). It still needs a **fresh** SQLite DB (the WS3C consent + FK columns come from
+> `EnsureCreated`; SQLite rejects the Postgres `ADD COLUMN IF NOT EXISTS` catch-up).
 
 Run them in any order; each is standalone and self-seeding.
 

@@ -14,11 +14,13 @@ namespace DJDiP.Application.Services
     {
         private readonly IUnitOfWork _unitOfWork;
         private readonly AuthSettings _settings;
+        private readonly ILoginThrottle _loginThrottle;
 
-        public AuthService(IUnitOfWork unitOfWork, IOptions<AuthSettings> options)
+        public AuthService(IUnitOfWork unitOfWork, IOptions<AuthSettings> options, ILoginThrottle loginThrottle)
         {
             _unitOfWork = unitOfWork;
             _settings = options.Value;
+            _loginThrottle = loginThrottle;
         }
 
         private static void ValidatePassword(string password)
@@ -35,8 +37,19 @@ namespace DJDiP.Application.Services
                 throw new InvalidOperationException("Password must contain at least one special character.");
         }
 
-        public async Task<AuthPayload> RegisterAsync(string fullName, string email, string password)
+        // P0-WS3C (GDPR) — the binding terms/privacy policy version accepted at signup.
+        // Stamped on every user who registers; bump when the policy materially changes.
+        public const string CurrentTermsVersion = "2026-06-11";
+
+        public async Task<AuthPayload> RegisterAsync(
+            string fullName, string email, string password,
+            bool acceptTerms, bool marketingOptIn = false, string? marketingPurpose = null)
         {
+            // P0-WS3C — terms acceptance is REQUIRED and enforced server-side (no bypass).
+            // Reject BEFORE any password hashing / DB write so no user row is created.
+            if (!acceptTerms)
+                throw new InvalidOperationException("You must accept the terms and privacy policy to register.");
+
             ValidatePassword(password);
 
             var existingUser = await _unitOfWork.Users.GetByEmailAsync(email);
@@ -45,6 +58,7 @@ namespace DJDiP.Application.Services
                 throw new InvalidOperationException("An account with this email already exists.");
             }
 
+            var now = DateTime.UtcNow;
             var user = new ApplicationUser
             {
                 Id = Guid.NewGuid().ToString(),
@@ -53,9 +67,23 @@ namespace DJDiP.Application.Services
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
                 Provider = "Local",
                 Role = 0,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+                CreatedAt = now,
+                UpdatedAt = now,
+                // Terms consent — stamped with timestamp + policy version (Art. 7 provability).
+                TermsAcceptedAt = now,
+                TermsVersion = CurrentTermsVersion
             };
+
+            // Marketing is a SEPARATE, explicit opt-in — stamped only when the user opted in,
+            // with its own timestamp + purpose. Never inferred from terms acceptance.
+            if (marketingOptIn)
+            {
+                user.MarketingOptIn = true;
+                user.MarketingOptInAt = now;
+                user.MarketingPurpose = string.IsNullOrWhiteSpace(marketingPurpose)
+                    ? "email-marketing"
+                    : marketingPurpose;
+            }
 
             await _unitOfWork.Users.AddAsync(user);
             await _unitOfWork.SaveChangesAsync();
@@ -65,6 +93,14 @@ namespace DJDiP.Application.Services
 
         public async Task<AuthPayload> LoginAsync(string email, string password)
         {
+            // P0-WS3A — per-account lockout. The SAME generic "Invalid credentials." is returned for
+            // locked, unknown, and wrong-password cases, so the lock never leaks account existence
+            // (preserves the existing enumeration-safe behavior). Lock is keyed by email, never IP.
+            if (_loginThrottle.IsLocked(email))
+            {
+                throw new InvalidOperationException("Invalid credentials.");
+            }
+
             var user = await _unitOfWork.Users.GetByEmailAsync(email);
             if (user == null)
             {
@@ -74,9 +110,23 @@ namespace DJDiP.Application.Services
             var passwordValid = BCrypt.Net.BCrypt.Verify(password, user.PasswordHash);
             if (!passwordValid)
             {
+                // Count this consecutive failure against the account; crossing the threshold locks it.
+                _loginThrottle.RegisterFailure(email);
                 throw new InvalidOperationException("Invalid credentials.");
             }
 
+            // Success clears any accumulated failures for this account.
+            _loginThrottle.Reset(email);
+            return GenerateAuthPayload(user);
+        }
+
+        public async Task<AuthPayload?> IssueForUserIdAsync(string userId)
+        {
+            // P0-WS3B — the refresh endpoint has already proven the caller's identity via the signed
+            // klubn_rt cookie. We re-read the user (so a deleted/disabled account cannot refresh) and
+            // mint a fresh access token with current claims (role changes take effect on refresh).
+            var user = await _unitOfWork.Users.GetByIdAsync(userId);
+            if (user == null) return null;
             return GenerateAuthPayload(user);
         }
 

@@ -19,4 +19,14 @@ namespace DJDiP.Application.DTO.AuditLogDTO
         public string UserId { get; set; } = string.Empty;
         public string? Changes { get; set; }
     }
+
+    // WS2: filter for the Admin audit-log read query (Phase 3). Null fields = no filter.
+    public class AuditLogFilter
+    {
+        public string? EntityName { get; set; }
+        public string? EntityId { get; set; }
+        public string? UserId { get; set; }
+        public int Skip { get; set; } = 0;
+        public int Take { get; set; } = 100;
+    }
 }

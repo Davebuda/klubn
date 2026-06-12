@@ -3,6 +3,7 @@ using System;
 using DJDiP.Infrastructure.Persistance;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260611135504_ActivateAuditLog")]
+    partial class ActivateAuditLog
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.6");
@@ -81,15 +84,6 @@ namespace Infrastructure.Migrations
                     b.Property<DateTime?>("LastLoginAt")
                         .HasColumnType("TEXT");
 
-                    b.Property<bool>("MarketingOptIn")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime?>("MarketingOptInAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MarketingPurpose")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -108,12 +102,6 @@ namespace Infrastructure.Migrations
 
                     b.Property<int>("Role")
                         .HasColumnType("INTEGER");
-
-                    b.Property<DateTime?>("TermsAcceptedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("TermsVersion")
-                        .HasColumnType("TEXT");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
@@ -2588,7 +2576,7 @@ namespace Infrastructure.Migrations
                     b.HasOne("DJDiP.Domain.Models.ApplicationUser", "User")
                         .WithMany("Tickets")
                         .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.Navigation("Event");

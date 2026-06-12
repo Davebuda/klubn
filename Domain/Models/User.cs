@@ -17,6 +17,16 @@ namespace DJDiP.Domain.Models
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? LastLoginAt { get; set; }
 
+        // P0-WS3C (GDPR) — consent capture at signup. Terms and marketing are SEPARATE
+        // legal bases, never bundled. TermsAcceptedAt/TermsVersion record the acceptance of
+        // the binding terms/privacy policy (required to register). MarketingOptIn is an
+        // independent, explicit opt-in stored with its own timestamp + purpose (Art. 6/7).
+        public DateTime? TermsAcceptedAt { get; set; }
+        public string? TermsVersion { get; set; }
+        public bool MarketingOptIn { get; set; } = false;
+        public DateTime? MarketingOptInAt { get; set; }
+        public string? MarketingPurpose { get; set; }
+
         // Navigation Properties
         public List<DJProfile> DJProfiles { get; set; } = new();  // One-to-many: Admin can manage multiple DJ profiles
         public List<Order> Orders { get; set; } = new();

@@ -118,6 +118,7 @@ namespace DJDiP.Tests
         public IRepository<Playlist> Playlists => throw new NotSupportedException();
         public IRepository<PlaylistSong> PlaylistSongs => throw new NotSupportedException();
         public IRepository<DJMix> DJMixes => throw new NotSupportedException();
+        public IAuditLogRepository AuditLogs => throw new NotSupportedException();
 
         public Task<int> SaveChangesAsync() => throw new NotSupportedException();
         public Task BeginTransactionAsync() => throw new NotSupportedException();

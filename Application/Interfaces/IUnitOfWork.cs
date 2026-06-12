@@ -30,6 +30,7 @@ namespace DJDiP.Application.Interfaces
         IRepository<Playlist> Playlists { get; }
         IRepository<PlaylistSong> PlaylistSongs { get; }
         IRepository<DJMix> DJMixes { get; }
+        IAuditLogRepository AuditLogs { get; }
 
         Task<int> SaveChangesAsync();
         Task BeginTransactionAsync();

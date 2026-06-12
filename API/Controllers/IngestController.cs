@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Serialization;
+using DJDiP.Application.Common;
 using DJDiP.Domain.Models;
 using DJDiP.Infrastructure.Persistance;
 using Microsoft.AspNetCore.Mvc;
@@ -121,6 +122,13 @@ public class IngestController : ControllerBase
         if (body == null || string.IsNullOrWhiteSpace(body.title) || string.IsNullOrWhiteSpace(body.SourcePostId))
             return BadRequest(new { error = "title and source_post_id are required" });
 
+        // P0-WS3B — reject non-http(s) (e.g. javascript:/data:) URLs before they persist and reach
+        // a frontend <a href> sink. Both fields are optional; only non-empty values are checked.
+        if (!UrlSchemeValidator.IsSafeOrEmpty(body.imageUrl))
+            return BadRequest(new { error = "imageUrl must be a valid http(s) URL." });
+        if (!UrlSchemeValidator.IsSafeOrEmpty(body.ticketingUrl))
+            return BadRequest(new { error = "ticketingUrl must be a valid http(s) URL." });
+
         // Content-based idempotency key from the incoming payload (empty when
         // date or venue is missing — then we dedup on SourcePostId alone).
         var eventKey = ComputeEventKey(body.date, body.venue?.name);
@@ -186,6 +194,15 @@ public class IngestController : ControllerBase
         if (body == null || string.IsNullOrWhiteSpace(body.title) || string.IsNullOrWhiteSpace(body.SourcePostId))
             return BadRequest(new { error = "title and source_post_id are required" });
 
+        // P0-WS3B — scheme allowlist on the URL fields that flow to <a href> sinks (mixUrl/url) and
+        // image sinks (thumbnailUrl). Optional values only; empty passes.
+        if (!UrlSchemeValidator.IsSafeOrEmpty(body.mixUrl))
+            return BadRequest(new { error = "mixUrl must be a valid http(s) URL." });
+        if (!UrlSchemeValidator.IsSafeOrEmpty(body.url))
+            return BadRequest(new { error = "url must be a valid http(s) URL." });
+        if (!UrlSchemeValidator.IsSafeOrEmpty(body.thumbnailUrl))
+            return BadRequest(new { error = "thumbnailUrl must be a valid http(s) URL." });
+
         if (await _db.DJMixes.AnyAsync(m => m.SourcePostId == body.SourcePostId))
             return Ok(new { created = false });
 
@@ -222,6 +239,12 @@ public class IngestController : ControllerBase
         if (!SecretValid()) return Unauthorized(new { error = "Unauthorized" });
         if (body == null || string.IsNullOrWhiteSpace(body.mediaUrl) || string.IsNullOrWhiteSpace(body.SourcePostId))
             return BadRequest(new { error = "mediaUrl and source_post_id are required" });
+
+        // P0-WS3B — mediaUrl is required (must be a real http(s) URL); thumbnailUrl is optional.
+        if (!UrlSchemeValidator.IsSafeHttpUrl(body.mediaUrl))
+            return BadRequest(new { error = "mediaUrl must be a valid http(s) URL." });
+        if (!UrlSchemeValidator.IsSafeOrEmpty(body.thumbnailUrl))
+            return BadRequest(new { error = "thumbnailUrl must be a valid http(s) URL." });
 
         if (await _db.GalleryMedia.AnyAsync(g => g.SourcePostId == body.SourcePostId))
             return Ok(new { created = false });

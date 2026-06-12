@@ -1,3 +1,5 @@
+using System.Text.Json;
+using DJDiP.Application.DTO.AuditLogDTO;
 using DJDiP.Application.DTO.PaymentDTO;
 using DJDiP.Application.DTO.TicketDTO;
 using DJDiP.Application.Interfaces;
@@ -11,6 +13,7 @@ namespace DJDiP.Application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IEmailService _emailService;
         private readonly IPaymentProvider _paymentProvider;
+        private readonly IAuditLogService _auditLog;
         private readonly ILogger<TicketService> _logger;
         private const decimal NORWEGIAN_EVENT_VAT_RATE = 0.12m; // 12% VAT for event tickets in Norway
 
@@ -18,11 +21,13 @@ namespace DJDiP.Application.Services
             IUnitOfWork unitOfWork,
             IEmailService emailService,
             IPaymentProvider paymentProvider,
+            IAuditLogService auditLog,
             ILogger<TicketService> logger)
         {
             _unitOfWork = unitOfWork;
             _emailService = emailService;
             _paymentProvider = paymentProvider;
+            _auditLog = auditLog;
             _logger = logger;
         }
 
@@ -155,6 +160,13 @@ namespace DJDiP.Application.Services
                 return null;
             }
 
+            // P0-WS1 (IDOR): only the ticket's owner (or an Admin/CoAdmin) may cancel it.
+            // Enforced here so any caller — GraphQL or REST — inherits the check.
+            if (!cancelDto.IsManager && ticket.UserId != cancelDto.ActingUserId)
+            {
+                throw new UnauthorizedAccessException("Access denied.");
+            }
+
             // Norwegian consumer rights: typically 14 days for distance sales
             ticket.Status = TicketStatus.Cancelled;
             ticket.CancelledDate = DateTime.UtcNow;
@@ -163,6 +175,23 @@ namespace DJDiP.Application.Services
 
             await _unitOfWork.Tickets.UpdateAsync(ticket);
             await _unitOfWork.SaveChangesAsync();
+
+            // P0-WS2 (audit): one attributable row per SUCCESSFUL cancel. Placed AFTER the
+            // SaveChanges success point — a denied caller throws above and writes nothing.
+            // Actor is the JWT-derived caller (ActingUserId), never the ticket's owner.
+            await _auditLog.RecordAsync(new CreateAuditLogDTO
+            {
+                Action = "TicketCancel",
+                EntityName = "Ticket",
+                EntityId = ticket.Id.ToString(),
+                UserId = cancelDto.ActingUserId,
+                Changes = JsonSerializer.Serialize(new
+                {
+                    ticketId = ticket.Id,
+                    reason = cancelDto.Reason,
+                    byManager = cancelDto.IsManager
+                })
+            });
 
             return MapToDto(ticket);
         }
@@ -234,6 +263,25 @@ namespace DJDiP.Application.Services
             await _unitOfWork.Tickets.UpdateAsync(ticket);
             await _unitOfWork.SaveChangesAsync();
 
+            // P0-WS2 (audit): one attributable row per SUCCESSFUL refund, AFTER the refund
+            // SaveChanges (the refund/economic flow above is untouched; RecordAsync does its
+            // OWN SaveChanges). PCI/GDPR: ids + amounts only — NO card/PAN/token/PII.
+            var refundMinor = (long)Math.Round(ticket.TotalPrice * 100m, MidpointRounding.AwayFromZero);
+            await _auditLog.RecordAsync(new CreateAuditLogDTO
+            {
+                Action = "TicketRefund",
+                EntityName = "Ticket",
+                EntityId = ticket.Id.ToString(),
+                UserId = refundDto.ActingUserId,
+                Changes = JsonSerializer.Serialize(new
+                {
+                    ticketId = ticket.Id,
+                    amountMinor = refundMinor,
+                    currency = payment?.Currency ?? "NOK",
+                    reference = payment?.ProviderReference ?? transactionId
+                })
+            });
+
             // Send refund confirmation email
             var emailAddress = ticket.ConfirmationEmailSentTo;
             var user = ticket.User;
@@ -268,6 +316,13 @@ namespace DJDiP.Application.Services
                 return null;
             }
 
+            // P0-WS1 (IDOR -> ticket theft): only the current owner (or an Admin/CoAdmin)
+            // may transfer. Enforced here so GraphQL and REST both inherit the check.
+            if (!transferDto.IsManager && ticket.UserId != transferDto.ActingUserId)
+            {
+                throw new UnauthorizedAccessException("Access denied.");
+            }
+
             var newUser = await _unitOfWork.Users.GetByIdAsync(transferDto.ToUserId);
             if (newUser == null)
             {
@@ -290,6 +345,23 @@ namespace DJDiP.Application.Services
 
             await _unitOfWork.Tickets.UpdateAsync(ticket);
             await _unitOfWork.SaveChangesAsync();
+
+            // P0-WS2 (audit): one attributable row per SUCCESSFUL transfer, AFTER the
+            // SaveChanges success point. Actor is the JWT-derived caller (ActingUserId) —
+            // never the recipient (ToUserId). A denied/cross-user attempt throws above.
+            await _auditLog.RecordAsync(new CreateAuditLogDTO
+            {
+                Action = "TicketTransfer",
+                EntityName = "Ticket",
+                EntityId = ticket.Id.ToString(),
+                UserId = transferDto.ActingUserId,
+                Changes = JsonSerializer.Serialize(new
+                {
+                    ticketId = ticket.Id,
+                    fromUserId = ticket.TransferredFromUserId,
+                    toUserId = transferDto.ToUserId
+                })
+            });
 
             // Send transfer confirmation to the new owner
             if (!string.IsNullOrWhiteSpace(transferDto.ToEmail))

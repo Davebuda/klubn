@@ -26,8 +26,10 @@ namespace DJDiP.Application.Services
                 return;
             }
 
-            await EnsureUserExistsAsync(userId);
-
+            // P0-WS1 (TRUSTS-CLIENT-IDENTITY): the caller is now always the JWT-verified
+            // principal (resolver derives userId from the token), so a real account always
+            // exists. The old EnsureUserExistsAsync placeholder auto-create — which minted a
+            // "Guest Listener" row for any client-supplied id — is removed.
             var follow = new UserFollowDJ
             {
                 UserId = userId,
@@ -37,26 +39,6 @@ namespace DJDiP.Application.Services
             };
 
             await _unitOfWork.UserFollowDJs.AddAsync(follow);
-            await _unitOfWork.SaveChangesAsync();
-        }
-
-        private async Task EnsureUserExistsAsync(string userId)
-        {
-            if (await _unitOfWork.Users.ExistsAsync(userId))
-            {
-                return;
-            }
-
-            var placeholderUser = new ApplicationUser
-            {
-                Id = userId,
-                FullName = "Guest Listener",
-                Email = $"{userId}@guest.dj-dip.local",
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
-            };
-
-            await _unitOfWork.Users.AddAsync(placeholderUser);
             await _unitOfWork.SaveChangesAsync();
         }
 

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using DJDiP.Application.Common;
 using DJDiP.Application.DTO.PaymentDTO;
 using DJDiP.Application.Interfaces;
 using DJDiP.Application.Options;
@@ -151,7 +152,7 @@ namespace DJDiP.Application.Services
             {
                 _logger.LogInformation(
                     "[EmailService] Email disabled. Would have sent '{Subject}' to {Email}",
-                    subject, toEmail);
+                    subject, PiiMasker.MaskEmail(toEmail));
                 return;
             }
 
@@ -181,12 +182,12 @@ namespace DJDiP.Application.Services
                 await client.SendAsync(message);
                 await client.DisconnectAsync(true);
 
-                _logger.LogInformation("[EmailService] Sent '{Subject}' to {Email}", subject, toEmail);
+                _logger.LogInformation("[EmailService] Sent '{Subject}' to {Email}", subject, PiiMasker.MaskEmail(toEmail));
             }
             catch (Exception ex)
             {
                 // Log but never throw — email failure must never block the purchase flow
-                _logger.LogError(ex, "[EmailService] Failed to send '{Subject}' to {Email}", subject, toEmail);
+                _logger.LogError(ex, "[EmailService] Failed to send '{Subject}' to {Email}", subject, PiiMasker.MaskEmail(toEmail));
             }
         }
 
