@@ -11,6 +11,33 @@ gamification (points/badges), and admin/portal back-office.
 > them; they are load-bearing (namespaces, EF model, config keys). Treat `DJDiP` (code) and
 > `KlubN`/`klubn.no` (brand/domain) as the same project. See `docs/DOC-AUDIT.md`.
 
+## Operating mode (any non-trivial task)
+State the detected stage before acting — **audit · remediation · feature · release · incident** —
+then: Orient (read the touched layer's `AGENTS.md`) → Research → Plan → Implement → Verify.
+
+**Research is mandatory before planning** any change to payments, auth, GDPR flows, dependency
+versions, or third-party APIs: installed-version docs via context7, CVEs/compliance/Vipps+Stripe
+API behavior via Perplexity/exa MCP. Installed-version docs beat training memory.
+
+**Hard stops — stop and escalate instead of proceeding if a change would:**
+- weaken auth/authz, payment exactly-once semantics (`PaymentOrchestrator.FinalizeAsync`),
+  webhook signature verification, or QR signing;
+- weaken GDPR posture (consent capture, `exportMyData`/`requestErasure`, retention, audit rows);
+- expand the anonymous/public GraphQL surface;
+- silently change the DB schema or the GraphQL contract;
+- need scope beyond the agreed plan (re-plan; don't drift).
+
+**Every plan states:** goal, current state, files to change, risks, test plan, rollback.
+
+**Verification gate — required before claiming done or committing significant work:**
+- `dotnet build DJ-DiP.sln` + `dotnet test Tests/Tests.csproj`
+- `cd Frontend && npm run build` (`tsc -b` is the type gate; lint is broken — see Gotchas)
+- Payments/auth/GDPR/GraphQL-surface changes also require the **security regression gate**:
+  the relevant `scripts/e2e/*.py` suites (`scripts/e2e/README.md`) — `.\scripts\verify-all.ps1`
+  runs the full set.
+- Release-level work: run `/comply release`, then close with a dated note in `docs/audit/`
+  (scope · fixed-with-evidence · consciously-deferred), per `docs/audit/2026-06-closure.md`.
+
 ## Stack
 Verified from `DJDiP.csproj`, `Frontend/package.json`, `docker-compose.yml`.
 
@@ -112,6 +139,7 @@ external n8n workflow that scrapes social media:
 - `dotnet test Tests/Tests.csproj` — xUnit suite (QR + Vipps adapter).
 - `dotnet ef migrations add <Name> --project Infrastructure --startup-project .` — add a migration.
 - `python scripts/register-vipps-webhook.py [--list|--delete <id>]` — one-time Vipps webhook subscription management (reads `.env`).
+- `.\scripts\verify-all.ps1` — the full verification gate: build + unit tests + frontend type-build + the e2e security regression suites (`-SkipE2E` / `-Suite <name>` to narrow).
 - Migrations + seed run automatically on startup via `DbInitializer.InitializeAsync`.
 
 **Frontend** (`cd Frontend`): `npm run dev` (Vite, **:3000, strictPort**) · `npm run build` (`tsc -b && vite build`) · `npm run lint` (currently broken — see Gotchas) · `npm run preview`.
@@ -145,6 +173,12 @@ Names from `.env.example` / `docker-compose.yml` — never commit values. Double
 - **`DJDiP` everywhere in code is intentional**, not stale — see naming note up top. The brand is KlubN; the code identity is DJDiP.
 - **HotChocolate 13 returns HTTP 500 when a non-null field resolves null** (GraphQL-over-HTTP). The frontend works around this in `Frontend/src/apollo-client.ts` by rewriting 500-with-error-body responses to 200. Don't "fix" that fetch wrapper without understanding why it exists.
 - **Three DB providers are referenced** (SQLite/Postgres/SqlServer). The active one is chosen by the connection string, not by code — dev uses SQLite `DJDIP.db`, prod uses Postgres.
+- **`createTicketType` defaults `Status = Draft`** — a tier created without an explicit
+  `status: ON_SALE` is invisible to buyers (public resolver excludes Draft), which renders
+  "No tickets are currently on sale" on the event page. This caused the 2026-06 prod incident
+  (`docs/audit/2026-06-12-tickets-incident-closure.md`). The admin UI (`/admin/ticket-types`)
+  forces an explicit choice; any script/mutation must pass `status` deliberately. Post-deploy
+  gate: `.\scripts\post-deploy-smoke.ps1`.
 - **`Application/Class1.cs`** is an empty scaffold leftover — ignore it; don't put real code there.
 - **Domain-vs-brand drift inside config:** `.env.example` mixes `klubn.com` while `docker-compose.yml` Traefik rules use `klubn.no`. The live domain is `klubn.no`.
 

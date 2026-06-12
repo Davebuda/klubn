@@ -227,4 +227,26 @@ Vipps adapter regardless of what the registry currently exposes.
 - `scripts/register-stripe-webhook.py` — script analogous to `register-vipps-webhook.py`;
   not yet written. Manual Dashboard registration (§2) is the current path.
 - Admin CRUD for promo codes — tracked separately; SQL inserts (§3) bridge until built.
+  (Admin CRUD for **ticket types** shipped 2026-06-12 — `/admin/ticket-types`.)
 - Guest checkout (nullable `Order.UserId` migration) — tracked separately.
+- Wave 2 production enablement (Stripe live keys + §2 webhook + dual-path phone
+  smokes) — deferred by decision 2026-06-12; the code path is complete and
+  unit/e2e-tested, prod stays Vipps-only until this is executed.
+
+## 7. Post-deploy verification gate (every deploy)
+
+Born from the 2026-06 "no tickets in prod" incident (twice the production
+`TicketTypes` table was empty while event pages looked fine —
+`docs/audit/2026-06-12-tickets-incident-closure.md`):
+
+```powershell
+.\scripts\post-deploy-smoke.ps1                 # gate against https://klubn.no
+```
+
+- **FAILS** (exit 1) if any upcoming `Published` event without an external
+  `ticketingUrl` has zero **OnSale** tiers — that exact state renders
+  "No tickets are currently on sale for this event" to every buyer.
+- WARNS if OnSale tiers exist but none have availability (sold out / all held).
+- Read-only and anonymous — safe to run any time, from anywhere.
+- After payment-critical changes, this gate is **in addition to** the real-money
+  phone smoke (vipps-production.md §4), never a substitute.

@@ -65,7 +65,18 @@ If the secret is ever lost: `python scripts/register-vipps-webhook.py --delete d
 
 ## 4. Production smoke test (real money!)
 
-1. Create a cheap hidden tier (e.g. 10 NOK, capacity 1) on a real event via admin.
+> **Required after ANY checkout/payment-critical change** (provider adapters,
+> orchestrator, webhook handling, checkout resolvers, Traefik routing) — not just
+> the first cutover.
+
+1. Create a cheap test tier ("Crew test — do not buy", 10 NOK, capacity 1,
+   status **OnSale**) via the admin UI at **`/admin/ticket-types`** (CoAdmin/Admin).
+   The form forces an explicit status choice — a tier left **Draft is invisible to
+   buyers** (the footgun behind the 2026-06 "no tickets" incident, see
+   `docs/audit/2026-06-12-tickets-incident-closure.md`). Truly hidden tiers
+   (`IsHidden`) still require SQL + an `UnlocksHiddenTypes` promo
+   (checkout-rollout.md §3); for a smoke, a visible capacity-1 tier you buy
+   immediately is simpler.
 2. Buy it with a real phone/Vipps → approve → return page should flip to
    **Payment confirmed** (webhook now does the capture; the return-page poll is the
    fallback).
@@ -73,6 +84,11 @@ If the secret is ever lost: `python scripts/register-vipps-webhook.py --delete d
 4. Admin-refund the ticket — money returns to the buyer; payment shows `Refunded`.
 5. Check `docker compose logs backend` for the webhook lines
    (`Webhook processed: Vipps Captured ...`).
+6. Close the test tier (status → Closed) in `/admin/ticket-types`, then run the
+   post-deploy gate from the repo:
+   `.\scripts\post-deploy-smoke.ps1` — it fails if any upcoming
+   internally-ticketed event has zero OnSale tiers. Run this after **every**
+   deploy, not only payment-related ones.
 
 ## 5. Watchpoints
 
