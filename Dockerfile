@@ -2,7 +2,8 @@
 # Multi-stage build for optimized production image
 
 # Stage 1: Build
-FROM mcr.microsoft.com/dotnet/sdk:10.0-preview AS build
+# .NET 10 GA (was 10.0-preview, which predates ForwardedHeadersOptions.KnownIPNetworks used by WS3A)
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 # Copy csproj files and restore dependencies
@@ -23,7 +24,7 @@ FROM build AS publish
 RUN dotnet publish "DJDiP.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 # Stage 3: Runtime
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-preview AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 
 # Create non-root user
