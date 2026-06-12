@@ -557,3 +557,4 @@ Frontend/*.jpeg
 .omc/
 .scout/
 .claude/screenshots/
+.playwright-mcp/

@@ -1,0 +1,1136 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type AdminUserDto {
+  id: String!
+  fullName: String!
+  email: String!
+  role: Int!
+  isEmailVerified: Boolean!
+  provider: String
+  profilePictureUrl: String
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  lastLoginAt: DateTime
+}
+
+type AuditLogDTO {
+  id: UUID!
+  timestamp: DateTime!
+  action: String!
+  entityName: String!
+  entityId: String!
+  userId: String!
+  changes: String
+}
+
+type AuthPayload {
+  accessToken: String!
+  refreshToken: String!
+  user: AuthUserPayload!
+}
+
+type AuthUserPayload {
+  id: String!
+  email: String!
+  fullName: String!
+  role: String!
+  profilePictureUrl: String
+}
+
+type CheckoutQuote {
+  ok: Boolean!
+  reason: String
+  lines: [CheckoutQuoteLine!]!
+  subtotalMinor: Long!
+  discountMinor: Long!
+  vatMinor: Long!
+  totalMinor: Long!
+  currency: String!
+  promo: CheckoutQuotePromo
+  availableProviders: [String!]!
+}
+
+type CheckoutQuoteLine {
+  ticketTypeId: UUID!
+  name: String!
+  quantity: Int!
+  unitPriceMinor: Long!
+  vatRate: Decimal!
+  lineGrossMinor: Long!
+  discountMinor: Long!
+  lineTotalMinor: Long!
+}
+
+type CheckoutQuotePromo {
+  code: String!
+  ok: Boolean!
+  reason: String
+}
+
+type ContactMessageReadDto {
+  id: UUID!
+  message: String!
+  userFullName: String!
+  createdAt: DateTime!
+}
+
+type CreateTicketOrderPayload {
+  order: OrderSummary!
+  redirectUrl: String!
+  provider: String!
+}
+
+type DJApplicationDto {
+  id: UUID!
+  userId: String!
+  stageName: String!
+  bio: String!
+  genre: String!
+  yearsExperience: Int!
+  specialties: String
+  influencedBy: String
+  equipmentUsed: String
+  socialLinks: String
+  profileImageUrl: String
+  coverImageUrl: String
+  status: ApplicationStatus!
+  submittedAt: DateTime!
+  reviewedAt: DateTime
+  reviewedByAdminId: String
+  rejectionReason: String
+  userEmail: String
+  userName: String
+}
+
+type DJMixDto {
+  id: UUID!
+  title: String!
+  description: String
+  mixUrl: String!
+  thumbnailUrl: String
+  genre: String
+  mixType: String
+  djProfileId: UUID
+  djName: String
+  createdAt: DateTime!
+}
+
+type DJProfileDetailDto {
+  id: UUID!
+  stageName: String!
+  name: String!
+  bio: String!
+  longBio: String
+  genre: String!
+  socialLinks: [SocialLinkDto!]!
+  profilePictureUrl: String!
+  coverImageUrl: String
+  tagline: String
+  specialties: String
+  achievements: String
+  yearsExperience: Int
+  influencedBy: String
+  equipmentUsed: String
+  topTracks: [String!]!
+  genreIds: [UUID!]!
+  followerCount: Int!
+  upcomingEvents: [DJProfileEventSummaryDto!]!
+}
+
+type DJProfileEventSummaryDto {
+  eventId: UUID!
+  title: String!
+  date: DateTime!
+  venueName: String!
+  city: String
+  price: Decimal!
+  imageUrl: String
+}
+
+type DJProfileListItemDto {
+  id: UUID!
+  userId: String!
+  name: String!
+  stageName: String!
+  bio: String!
+  genre: String!
+  profilePictureUrl: String!
+  tagline: String
+  coverImageUrl: String
+  followerCount: Int!
+  averageRating: Float!
+  reviewCount: Int!
+  specialties: String
+  achievements: String
+  yearsExperience: Int
+  influencedBy: String
+  upcomingEvents: [DJProfileEventSummaryDto!]!
+}
+
+type DJReviewDto {
+  id: UUID!
+  djId: UUID!
+  userId: String!
+  userName: String!
+  rating: Int!
+  comment: String
+  createdAt: DateTime!
+}
+
+type DJTop10ListDto {
+  djId: UUID!
+  djStageName: String!
+  top10Songs: [DJTop10ReadDto!]!
+}
+
+type DJTop10ReadDto {
+  id: UUID!
+  djId: UUID!
+  djStageName: String!
+  songId: UUID!
+  songTitle: String!
+  song: SongDto
+}
+
+type DetailEventDto {
+  id: UUID!
+  title: String!
+  date: DateTime!
+  venueId: UUID!
+  price: Decimal!
+  description: String!
+  genreIds: [UUID!]!
+  djIds: [UUID!]!
+  imageUrl: String
+  videoUrl: String
+  ticketingUrl: String
+  venue: EventVenueDto!
+}
+
+type EventHighlightDto {
+  id: UUID!
+  eventId: UUID!
+  eventTitle: String
+  eventDate: DateTime!
+  title: String!
+  blurb: String
+  coverImageUrl: String!
+  coverVideoUrl: String
+  highlightDate: DateTime!
+  upcomingEventId: UUID
+  upcomingEventTitle: String
+  upcomingEventDate: DateTime
+  isPublished: Boolean!
+  sortOrder: Int!
+  media: [GalleryMediaDto!]!
+}
+
+type EventListDto {
+  id: UUID!
+  title: String!
+  description: String!
+  date: DateTime!
+  price: Decimal!
+  imageUrl: String
+  ticketingUrl: String
+  venue: EventVenueDto!
+  genres: [String!]!
+  status: String!
+  statusReason: String
+  organizerId: String
+}
+
+type EventVenueDto {
+  id: UUID!
+  name: String!
+  description: String!
+  address: String!
+  city: String!
+  country: String!
+  imageUrl: String
+  imageUrls: [String!]
+}
+
+type ExportDataDto {
+  profile: ExportProfileDto!
+  tickets: [ExportTicketDto!]!
+  orders: [ExportOrderDto!]!
+}
+
+type ExportOrderDto {
+  id: UUID!
+  reference: String!
+  status: String!
+  totalAmount: Decimal!
+  promoCode: String
+  orderDate: DateTime!
+}
+
+type ExportProfileDto {
+  id: String!
+  fullName: String
+  email: String
+  profilePictureUrl: String
+  role: String!
+  isEmailVerified: Boolean!
+  createdAt: DateTime!
+  termsAcceptedAt: DateTime
+  termsVersion: String
+  marketingOptIn: Boolean!
+  marketingOptInAt: DateTime
+  marketingPurpose: String
+}
+
+type ExportTicketDto {
+  id: UUID!
+  eventId: UUID!
+  ticketNumber: String!
+  status: String!
+  totalPrice: Decimal!
+  purchaseDate: DateTime!
+}
+
+type GalleryMediaDto {
+  id: UUID!
+  title: String!
+  description: String
+  mediaUrl: String!
+  mediaType: String!
+  thumbnailUrl: String
+  userId: String
+  userName: String
+  eventId: UUID
+  eventTitle: String
+  uploadedAt: DateTime!
+  isApproved: Boolean!
+  isFeatured: Boolean!
+  viewCount: Int!
+  likeCount: Int!
+  tags: String
+}
+
+type GenreDto {
+  id: UUID!
+  name: String!
+}
+
+type LandingPageData {
+  events: [EventListDto!]!
+  dJs: [DJProfileListItemDto!]!
+}
+
+type Mutation {
+  createTicketOrder(input: CreateTicketOrderInput!): CreateTicketOrderPayload! @cost(complexity: 5)
+  retryTicketOrderPayment(reference: String! provider: String): CreateTicketOrderPayload! @cost(complexity: 5)
+  completeSandboxPayment(reference: String!): TicketOrderStatusDto! @cost(complexity: 5)
+  reconcileTicketOrder(reference: String!): TicketOrderStatusDto! @cost(complexity: 5)
+  redeemTicket(token: String! admits: Int): RedeemTicketPayload! @cost(complexity: 5)
+  register(input: RegisterInput!): AuthPayload! @cost(complexity: 5)
+  login(input: LoginInput!): AuthPayload! @cost(complexity: 5)
+  forgotPassword(email: String!): Boolean! @cost(complexity: 5)
+  resetPassword(input: ResetPasswordInput!): Boolean! @cost(complexity: 5)
+  createEvent(input: CreateEventInput!): UUID! @cost(complexity: 5)
+  updateEvent(id: UUID! input: UpdateEventInput!): Boolean! @cost(complexity: 5)
+  deleteEvent(id: UUID!): Boolean! @cost(complexity: 5)
+  createEventAsOrganizer(input: CreateEventInput!): UUID! @cost(complexity: 5)
+  updateEventAsOrganizer(id: UUID! input: UpdateEventInput!): Boolean! @cost(complexity: 5)
+  deleteEventAsOrganizer(id: UUID!): Boolean! @cost(complexity: 5)
+  approveEvent(id: UUID!): Boolean! @cost(complexity: 5)
+  rejectEvent(id: UUID! reason: String!): Boolean! @cost(complexity: 5)
+  createDj(input: CreateDjInput!): UUID! @cost(complexity: 5)
+  updateDj(id: UUID! input: UpdateDjInput!): Boolean! @cost(complexity: 5)
+  deleteDj(id: UUID!): Boolean! @cost(complexity: 5)
+  submitDJApplication(input: CreateDJApplicationInput!): DJApplicationDto! @cost(complexity: 5)
+  approveDJApplication(applicationId: UUID! reviewedByAdminId: String!): DJApplicationDto! @cost(complexity: 5)
+  rejectDJApplication(applicationId: UUID! reviewedByAdminId: String! rejectionReason: String): DJApplicationDto! @cost(complexity: 5)
+  submitOrganizerApplication(input: CreateOrganizerApplicationInput!): OrganizerApplicationDto! @cost(complexity: 5)
+  approveOrganizerApplication(applicationId: UUID!): OrganizerApplicationDto! @cost(complexity: 5)
+  rejectOrganizerApplication(applicationId: UUID! rejectionReason: String): OrganizerApplicationDto! @cost(complexity: 5)
+  createGenre(input: CreateGenreInput!): UUID! @cost(complexity: 5)
+  updateGenre(id: UUID! input: UpdateGenreInput!): Boolean! @cost(complexity: 5)
+  createVenue(input: CreateVenueInput!): UUID! @cost(complexity: 5)
+  updateVenue(id: UUID! input: UpdateVenueInput!): Boolean! @cost(complexity: 5)
+  deleteVenue(id: UUID!): Boolean! @cost(complexity: 5)
+  createContactMessage(input: CreateContactMessageInput!): UUID! @cost(complexity: 5)
+  deleteContactMessage(id: UUID!): Boolean! @cost(complexity: 5)
+  subscribeNewsletter(input: CreateNewsletterInput!): NewsletterDto! @cost(complexity: 5)
+  unsubscribeNewsletter(id: UUID!): Boolean! @cost(complexity: 5)
+  createDjTop10Entry(input: CreateDjTop10Input!): UUID! @cost(complexity: 5)
+  deleteDjTop10Entry(id: UUID!): Boolean! @cost(complexity: 5)
+  createSong(input: CreateSongInput!): UUID! @cost(complexity: 5)
+  createPlaylist(input: CreatePlaylistInput!): UUID! @cost(complexity: 5)
+  updatePlaylist(id: UUID! input: UpdatePlaylistInput!): Boolean! @cost(complexity: 5)
+  deletePlaylist(id: UUID!): Boolean! @cost(complexity: 5)
+  addPlaylistSong(input: AddPlaylistSongInput!): UUID! @cost(complexity: 5)
+  removePlaylistSong(id: UUID!): Boolean! @cost(complexity: 5)
+  createDjMix(input: CreateDJMixInput!): UUID! @cost(complexity: 5)
+  updateDjMix(id: UUID! input: UpdateDJMixInput!): Boolean! @cost(complexity: 5)
+  deleteDjMix(id: UUID!): Boolean! @cost(complexity: 5)
+  updateSiteSettings(input: UpdateSiteSettingsInput!): SiteSettingsDto! @cost(complexity: 5)
+  createGalleryMedia(input: CreateGalleryMediaInput!): UUID! @cost(complexity: 5)
+  updateGalleryMedia(id: UUID! input: UpdateGalleryMediaInput!): Boolean! @cost(complexity: 5)
+  deleteGalleryMedia(id: UUID!): Boolean! @cost(complexity: 5)
+  createEventHighlight(input: CreateEventHighlightDtoInput!): UUID! @cost(complexity: 5)
+  updateEventHighlight(id: UUID! input: UpdateEventHighlightDtoInput!): Boolean! @cost(complexity: 5)
+  setHighlightPublished(id: UUID! published: Boolean!): Boolean! @cost(complexity: 5)
+  deleteEventHighlight(id: UUID!): Boolean! @cost(complexity: 5)
+  likeGalleryMedia(id: UUID!): Boolean! @cost(complexity: 5)
+  followDj(input: FollowDjInput!): Boolean! @cost(complexity: 5)
+  unfollowDj(input: FollowDjInput!): Boolean! @cost(complexity: 5)
+  purchaseTicket(input: PurchaseTicketInput!): TicketDto! @cost(complexity: 5)
+  checkInTicket(ticketId: UUID!): Boolean! @cost(complexity: 5)
+  cancelTicket(input: CancelTicketInput!): TicketDto @cost(complexity: 5)
+  refundTicket(input: RefundTicketInput!): TicketDto @cost(complexity: 5)
+  transferTicket(input: TransferTicketInput!): TicketDto @cost(complexity: 5)
+  invalidateTicket(ticketId: UUID!): Boolean! @cost(complexity: 5)
+  deleteTicket(ticketId: UUID!): Boolean! @cost(complexity: 5)
+  createTicketType(input: CreateTicketTypeInput!): TicketTypeDto! @cost(complexity: 5)
+  updateTicketType(input: UpdateTicketTypeInput!): TicketTypeDto! @cost(complexity: 5)
+  deleteTicketType(id: UUID!): Boolean! @cost(complexity: 5)
+  createDjReview(input: CreateDJReviewInput!): UUID! @cost(complexity: 5)
+  updateUserProfile(input: UpdateUserProfileInput!): Boolean! @cost(complexity: 5)
+  updateUserRole(userId: String! role: Int!): Boolean! @cost(complexity: 5)
+  deleteUser(userId: String!): Boolean! @cost(complexity: 5)
+  requestErasure: Boolean! @cost(complexity: 5)
+}
+
+type NewsletterDto {
+  id: UUID!
+  email: String!
+  userId: String!
+  subscribedAt: DateTime!
+  isActive: Boolean!
+}
+
+type OrderLineSummary {
+  ticketTypeName: String!
+  quantity: Int!
+  admitCount: Int!
+  unitPriceMinor: Long!
+  vatRate: Decimal!
+  lineTotalMinor: Long!
+}
+
+type OrderSummary {
+  reference: String!
+  lines: [OrderLineSummary!]!
+  subtotalMinor: Long!
+  vatMinor: Long!
+  totalMinor: Long!
+  currency: String!
+}
+
+type OrganizerApplicationDto {
+  id: UUID!
+  userId: String!
+  organizationName: String!
+  description: String!
+  website: String
+  socialLinks: String
+  status: String!
+  submittedAt: DateTime!
+  reviewedAt: DateTime
+  reviewedByAdminId: String
+  rejectionReason: String
+}
+
+type PlaylistDto {
+  id: UUID!
+  title: String!
+  description: String
+  genre: String
+  coverImageUrl: String
+  curator: String
+  playlistUrl: String
+  djProfileId: UUID
+  djName: String
+  createdAt: DateTime!
+  songs: [PlaylistSongDto!]!
+}
+
+type PlaylistSongDto {
+  id: UUID!
+  songId: UUID!
+  position: Int!
+  title: String!
+  artist: String!
+  genre: String
+  coverImageUrl: String
+  spotifyUrl: String
+  soundCloudUrl: String
+}
+
+type Query {
+  auditLogs(entityName: String entityId: String userId: String skip: Int! take: Int!): [AuditLogDTO!]! @cost(complexity: 5)
+  exportMyData: ExportDataDto @cost(complexity: 5)
+  ticketTypes(eventId: UUID! unlockCode: String): [TicketTypeAvailabilityDto!]! @cost(complexity: 5)
+  quoteTicketOrder(input: QuoteTicketOrderInput!): CheckoutQuote! @cost(complexity: 5)
+  ticketOrder(reference: String!): TicketOrderStatusDto @cost(complexity: 5)
+  landing: LandingPageData! @cost(complexity: 5)
+  events: [EventListDto!]! @cost(complexity: 5)
+  event(id: UUID!): DetailEventDto @cost(complexity: 5)
+  dJs: [DJProfileListItemDto!]! @cost(complexity: 5)
+  dj(id: UUID!): DJProfileDetailDto @cost(complexity: 5)
+  followedDjs(userId: String!): [DJProfileListItemDto!]! @cost(complexity: 5)
+  followerCount(djId: UUID!): Int! @cost(complexity: 5)
+  isFollowingDj(djId: UUID! userId: String!): Boolean! @cost(complexity: 5)
+  djApplication(id: UUID!): DJApplicationDto @cost(complexity: 5)
+  djApplicationByUser(userId: String!): DJApplicationDto @cost(complexity: 5)
+  djApplications: [DJApplicationDto!]! @cost(complexity: 5)
+  pendingDjApplications: [DJApplicationDto!]! @cost(complexity: 5)
+  hasPendingDjApplication(userId: String!): Boolean! @cost(complexity: 5)
+  ticketsByUser(userId: String!): [TicketDto!]! @cost(complexity: 5)
+  ticketsByEvent(eventId: UUID!): [TicketDto!]! @cost(complexity: 5)
+  ticket(id: UUID!): TicketDto @cost(complexity: 5)
+  genres: [GenreDto!]! @cost(complexity: 5)
+  venues: [VenueDto!]! @cost(complexity: 5)
+  venue(id: UUID!): VenueDto @cost(complexity: 5)
+  contactMessages: [ContactMessageReadDto!]! @cost(complexity: 5)
+  newsletters: [NewsletterDto!]! @cost(complexity: 5)
+  djTop10Lists: [DJTop10ListDto!]! @cost(complexity: 5)
+  djTop10(id: UUID!): DJTop10ReadDto @cost(complexity: 5)
+  songs: [SongDto!]! @cost(complexity: 5)
+  song(id: UUID!): SongDto @cost(complexity: 5)
+  siteSettings: SiteSettingsDto! @cost(complexity: 5)
+  galleryMedia(approvedOnly: Boolean): [GalleryMediaDto!]! @cost(complexity: 5)
+  featuredGalleryMedia: [GalleryMediaDto!]! @cost(complexity: 5)
+  galleryMediaItem(id: UUID!): GalleryMediaDto @cost(complexity: 5)
+  galleryMediaByEvent(eventId: UUID!): [GalleryMediaDto!]! @cost(complexity: 5)
+  galleryMediaByUser(userId: String!): [GalleryMediaDto!]! @cost(complexity: 5)
+  landingHighlights(limit: Int! = 6): [EventHighlightDto!]! @cost(complexity: 5)
+  allHighlights: [EventHighlightDto!]! @cost(complexity: 5)
+  userById(userId: String!): UserDetailsDto @cost(complexity: 5)
+  users: [AdminUserDto!]! @cost(complexity: 5)
+  ticketTypesByEvent(eventId: UUID!): [TicketTypeDto!]! @cost(complexity: 5)
+  djReviews(djId: UUID!): [DJReviewDto!]! @cost(complexity: 5)
+  playlists: [PlaylistDto!]! @cost(complexity: 5)
+  playlist(id: UUID!): PlaylistDto @cost(complexity: 5)
+  myDjPlaylists(djProfileId: UUID!): [PlaylistDto!]! @cost(complexity: 5)
+  fetchSongMetadata(url: String!): SongMetadataResult! @cost(complexity: 5)
+  djMixes: [DJMixDto!]! @cost(complexity: 5)
+  djMix(id: UUID!): DJMixDto @cost(complexity: 5)
+  organizerApplicationByUser(userId: String!): OrganizerApplicationDto @cost(complexity: 5)
+  organizerApplications: [OrganizerApplicationDto!]! @cost(complexity: 5)
+  pendingEvents: [EventListDto!]! @cost(complexity: 5)
+  myOrganizerEvents(userId: String!): [EventListDto!]! @cost(complexity: 5)
+}
+
+type RedeemTicketPayload {
+  ticketNumber: String!
+  eventTitle: String!
+  holderName: String
+  admittedNow: Int!
+  admitsRemaining: Int!
+  redeemedAt: DateTime!
+}
+
+type SiteSettingsDto {
+  id: UUID!
+  siteName: String!
+  tagline: String!
+  logoUrl: String!
+  faviconUrl: String!
+  primaryColor: String!
+  secondaryColor: String!
+  accentColor: String!
+  heroTitle: String!
+  heroSubtitle: String!
+  heroCtaText: String!
+  heroCtaLink: String!
+  heroBackgroundImageUrl: String!
+  heroBackgroundVideoUrl: String!
+  heroOverlayOpacity: Float!
+  heroGenres: String!
+  heroLocation: String!
+  heroVibes: String!
+  brandHeadline: String!
+  brandNarrative: String!
+  eventsHeading: String!
+  eventsTagline: String!
+  cultureHeading: String!
+  conceptHeading: String!
+  lineupHeading: String!
+  galleryVideoUrl: String!
+  contactEmail: String!
+  contactPhone: String!
+  contactAddress: String!
+  facebookUrl: String!
+  instagramUrl: String!
+  twitterUrl: String!
+  youTubeUrl: String!
+  tikTokUrl: String!
+  soundCloudUrl: String!
+  defaultEventImageUrl: String!
+  defaultDjImageUrl: String!
+  defaultVenueImageUrl: String!
+  enableNewsletter: Boolean!
+  enableNotifications: Boolean!
+  enableReviews: Boolean!
+  enableGamification: Boolean!
+  enableSubscriptions: Boolean!
+  metaDescription: String!
+  metaKeywords: String!
+  footerText: String!
+  copyrightText: String!
+}
+
+type SocialLinkDto {
+  label: String!
+  url: String!
+}
+
+type SongDto {
+  id: UUID!
+  title: String!
+  artist: String!
+  genre: String
+  duration: Int!
+  coverImageUrl: String
+  audioPreviewUrl: String
+  spotifyUrl: String
+  soundCloudUrl: String
+}
+
+type SongMetadataResult {
+  title: String!
+  artist: String!
+  coverImageUrl: String
+  spotifyUrl: String
+  soundCloudUrl: String
+}
+
+type TicketDto {
+  id: UUID!
+  eventId: UUID!
+  userId: String!
+  ticketNumber: String!
+  qrCode: String!
+  admitCount: Int!
+  admitsRemaining: Int!
+  basePrice: Decimal!
+  vatRate: Decimal!
+  vatAmount: Decimal!
+  totalPrice: Decimal!
+  isValid: Boolean!
+  isCheckedIn: Boolean!
+  status: String!
+  purchaseDate: DateTime!
+  checkInTime: DateTime
+  cancelledDate: DateTime
+  refundedDate: DateTime
+  termsAccepted: Boolean!
+  termsAcceptedDate: DateTime
+  transferredFromUserId: String
+  transferredDate: DateTime
+  event: TicketEventDto!
+}
+
+type TicketEventDto {
+  id: UUID!
+  title: String!
+  date: DateTime!
+  venueName: String!
+  city: String!
+  imageUrl: String!
+}
+
+type TicketOrderStatusDto {
+  reference: String!
+  status: String!
+  paymentState: String!
+  totalMinor: Long!
+  currency: String!
+}
+
+type TicketTypeAvailabilityDto {
+  id: UUID!
+  name: String!
+  description: String
+  priceMinor: Long!
+  vatRate: Decimal!
+  currency: String!
+  admitCount: Int!
+  minPerOrder: Int!
+  maxPerOrder: Int!
+  available: Int!
+  status: String!
+  sortOrder: Int!
+  isUnlocked: Boolean!
+}
+
+type TicketTypeDto {
+  id: UUID!
+  eventId: UUID!
+  name: String!
+  description: String
+  priceMinor: Long!
+  vatRate: Decimal!
+  currency: String!
+  capacity: Int!
+  quantitySold: Int!
+  quantityHeld: Int!
+  available: Int!
+  admitCount: Int!
+  minPerOrder: Int!
+  maxPerOrder: Int!
+  salesStart: DateTime
+  salesEnd: DateTime
+  status: String!
+  sortOrder: Int!
+}
+
+type UserDetailsDto {
+  fullName: String!
+  email: String!
+  profilePictureUrl: String
+}
+
+type VenueDto {
+  id: UUID!
+  name: String!
+  description: String!
+  address: String!
+  city: String!
+  country: String!
+  latitude: Float
+  longitude: Float
+  capacity: Int!
+  contactEmail: String!
+  phoneNumber: String
+  imageUrl: String
+  imageUrls: [String!]
+}
+
+input AddPlaylistSongInput {
+  playlistId: UUID!
+  songId: UUID!
+  position: Int!
+}
+
+input CancelTicketInput {
+  ticketId: UUID!
+  reason: String!
+}
+
+input CreateContactMessageInput {
+  userId: String!
+  message: String!
+}
+
+input CreateDJApplicationInput {
+  userId: String!
+  stageName: String!
+  bio: String!
+  genre: String!
+  yearsExperience: Int!
+  specialties: String
+  influencedBy: String
+  equipmentUsed: String
+  socialLinks: String
+  profileImageUrl: String
+  coverImageUrl: String
+}
+
+input CreateDJMixInput {
+  title: String!
+  description: String
+  mixUrl: String!
+  thumbnailUrl: String
+  genre: String
+  mixType: String
+  djProfileId: UUID
+}
+
+input CreateDJReviewInput {
+  djId: UUID!
+  rating: Int!
+  comment: String
+}
+
+input CreateDjInput {
+  stageName: String!
+  fullName: String
+  email: String
+  bio: String!
+  longBio: String
+  tagline: String
+  genre: String!
+  socialLinks: String!
+  profilePictureUrl: String!
+  coverImageUrl: String
+  specialties: String
+  achievements: String
+  yearsExperience: Int
+  influencedBy: String
+  equipmentUsed: String
+  userId: String!
+  topTracks: [String!]
+}
+
+input CreateDjTop10Input {
+  djId: UUID!
+  songId: UUID!
+}
+
+input CreateEventHighlightDtoInput {
+  eventId: UUID!
+  title: String!
+  blurb: String
+  coverImageUrl: String!
+  coverVideoUrl: String
+  highlightDate: DateTime!
+  upcomingEventId: UUID
+  isPublished: Boolean!
+  sortOrder: Int!
+}
+
+input CreateEventInput {
+  title: String!
+  date: DateTime!
+  venueId: UUID!
+  price: Decimal!
+  description: String!
+  genreIds: [UUID!]
+  djIds: [UUID!]
+  imageUrl: String
+  videoUrl: String
+  ticketingUrl: String
+}
+
+input CreateGalleryMediaInput {
+  title: String!
+  description: String
+  mediaUrl: String!
+  mediaType: String!
+  thumbnailUrl: String
+  eventId: UUID
+  tags: String
+}
+
+input CreateGenreInput {
+  name: String!
+}
+
+input CreateNewsletterInput {
+  email: String!
+  userId: String!
+}
+
+input CreateOrganizerApplicationInput {
+  userId: String!
+  organizationName: String!
+  description: String!
+  website: String
+  socialLinks: String
+}
+
+input CreatePlaylistInput {
+  title: String!
+  description: String
+  genre: String
+  coverImageUrl: String
+  curator: String
+  playlistUrl: String
+  djProfileId: UUID
+}
+
+input CreateSongInput {
+  title: String!
+  artist: String!
+  album: String
+  genre: String
+  duration: Int!
+  coverImageUrl: String
+  spotifyUrl: String
+  soundCloudUrl: String
+}
+
+input CreateTicketOrderInput {
+  eventId: UUID!
+  lines: [OrderLineInput!]!
+  customerEmail: String
+  promoCode: String
+  provider: String
+}
+
+input CreateTicketTypeInput {
+  eventId: UUID!
+  name: String!
+  description: String
+  priceMinor: Long!
+  vatRate: Decimal
+  currency: String
+  capacity: Int!
+  admitCount: Int!
+  minPerOrder: Int!
+  maxPerOrder: Int!
+  salesStart: DateTime
+  salesEnd: DateTime
+  status: TicketTypeStatus
+  sortOrder: Int!
+}
+
+input CreateVenueInput {
+  name: String!
+  description: String!
+  address: String!
+  city: String!
+  country: String!
+  latitude: Float
+  longitude: Float
+  capacity: Int!
+  contactEmail: String!
+  phoneNumber: String
+  imageUrl: String
+  imageUrls: [String!]
+}
+
+input FollowDjInput {
+  djId: UUID!
+  userId: String!
+}
+
+input LoginInput {
+  email: String!
+  password: String!
+}
+
+input OrderLineInput {
+  ticketTypeId: UUID!
+  quantity: Int!
+}
+
+input PurchaseTicketInput {
+  eventId: UUID!
+  userId: String!
+  termsAccepted: Boolean!
+  email: String!
+}
+
+input QuoteTicketOrderInput {
+  eventId: UUID!
+  lines: [OrderLineInput!]!
+  promoCode: String
+}
+
+input RefundTicketInput {
+  ticketId: UUID!
+  paymentMethod: String!
+}
+
+input RegisterInput {
+  fullName: String!
+  email: String!
+  password: String!
+  acceptTerms: Boolean!
+  marketingOptIn: Boolean
+  marketingPurpose: String
+}
+
+input ResetPasswordInput {
+  email: String!
+  token: String!
+  newPassword: String!
+}
+
+input TransferTicketInput {
+  ticketId: UUID!
+  toUserId: String!
+  toEmail: String!
+}
+
+input UpdateDJMixInput {
+  title: String!
+  description: String
+  mixUrl: String!
+  thumbnailUrl: String
+  genre: String
+  mixType: String
+  djProfileId: UUID
+}
+
+input UpdateDjInput {
+  stageName: String!
+  fullName: String
+  bio: String!
+  longBio: String
+  tagline: String
+  genre: String!
+  socialLinks: String!
+  profilePictureUrl: String!
+  coverImageUrl: String
+  specialties: String
+  achievements: String
+  yearsExperience: Int
+  influencedBy: String
+  equipmentUsed: String
+  topTracks: [String!]
+}
+
+input UpdateEventHighlightDtoInput {
+  title: String
+  blurb: String
+  coverImageUrl: String
+  coverVideoUrl: String
+  highlightDate: DateTime
+  upcomingEventId: UUID
+  isPublished: Boolean
+  sortOrder: Int
+}
+
+input UpdateEventInput {
+  title: String!
+  date: DateTime!
+  venueId: UUID!
+  price: Decimal!
+  description: String!
+  genreIds: [UUID!]
+  djIds: [UUID!]
+  imageUrl: String
+  videoUrl: String
+  ticketingUrl: String
+}
+
+input UpdateGalleryMediaInput {
+  title: String
+  description: String
+  isApproved: Boolean
+  isFeatured: Boolean
+  tags: String
+}
+
+input UpdateGenreInput {
+  name: String!
+}
+
+input UpdatePlaylistInput {
+  title: String!
+  description: String
+  genre: String
+  coverImageUrl: String
+  curator: String
+  playlistUrl: String
+}
+
+input UpdateSiteSettingsInput {
+  id: UUID!
+  siteName: String!
+  tagline: String!
+  logoUrl: String!
+  faviconUrl: String!
+  primaryColor: String!
+  secondaryColor: String!
+  accentColor: String!
+  heroTitle: String!
+  heroSubtitle: String!
+  heroCtaText: String!
+  heroCtaLink: String!
+  heroBackgroundImageUrl: String!
+  heroBackgroundVideoUrl: String!
+  heroOverlayOpacity: Float!
+  heroGenres: String!
+  heroLocation: String!
+  heroVibes: String!
+  brandHeadline: String!
+  brandNarrative: String!
+  eventsHeading: String!
+  eventsTagline: String!
+  cultureHeading: String!
+  conceptHeading: String!
+  lineupHeading: String!
+  galleryVideoUrl: String!
+  contactEmail: String!
+  contactPhone: String!
+  contactAddress: String!
+  facebookUrl: String!
+  instagramUrl: String!
+  twitterUrl: String!
+  youTubeUrl: String!
+  tikTokUrl: String!
+  soundCloudUrl: String!
+  defaultEventImageUrl: String!
+  defaultDjImageUrl: String!
+  defaultVenueImageUrl: String!
+  enableNewsletter: Boolean!
+  enableNotifications: Boolean!
+  enableReviews: Boolean!
+  enableGamification: Boolean!
+  enableSubscriptions: Boolean!
+  metaDescription: String!
+  metaKeywords: String!
+  footerText: String!
+  copyrightText: String!
+}
+
+input UpdateTicketTypeInput {
+  id: UUID!
+  name: String
+  description: String
+  priceMinor: Long
+  vatRate: Decimal
+  currency: String
+  capacity: Int
+  admitCount: Int
+  minPerOrder: Int
+  maxPerOrder: Int
+  salesStart: DateTime
+  salesEnd: DateTime
+  status: TicketTypeStatus
+  sortOrder: Int
+}
+
+input UpdateUserProfileInput {
+  id: String!
+  fullName: String!
+  email: String!
+  profilePictureUrl: String
+}
+
+input UpdateVenueInput {
+  name: String!
+  description: String!
+  address: String!
+  city: String!
+  country: String!
+  latitude: Float
+  longitude: Float
+  capacity: Int!
+  contactEmail: String!
+  phoneNumber: String
+  imageUrl: String
+  imageUrls: [String!]
+}
+
+enum ApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TicketTypeStatus {
+  DRAFT
+  ON_SALE
+  PAUSED
+  SOLD_OUT
+  CLOSED
+}
+
+"The cost directives is used to express the complexity of a field."
+directive @cost("Defines the complexity of the field." complexity: Int! = 1 "Defines field arguments that act as complexity multipliers." multipliers: [MultiplierPath!] defaultMultiplier: Int) on FIELD_DEFINITION
+
+"The `DateTime` scalar represents an ISO-8601 compliant date time type."
+scalar DateTime @specifiedBy(url: "https:\/\/www.graphql-scalars.com\/date-time")
+
+"The built-in `Decimal` scalar type."
+scalar Decimal
+
+"The `Long` scalar type represents non-fractional signed whole 64-bit numeric values. Long can represent values between -(2^63) and 2^63 - 1."
+scalar Long
+
+"The multiplier path scalar represents a valid GraphQL multiplier path string."
+scalar MultiplierPath
+
+scalar UUID @specifiedBy(url: "https:\/\/tools.ietf.org\/html\/rfc4122")
