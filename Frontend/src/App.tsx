@@ -38,6 +38,7 @@ import AdminVenuesPage from './pages/admin/AdminVenuesPage';
 import AdminDJsPage from './pages/admin/AdminDJsPage';
 import AdminPlaylistsPage from './pages/admin/AdminPlaylistsPage';
 import AdminTicketsPage from './pages/admin/AdminTicketsPage';
+import AdminTicketTypesPage from './pages/admin/AdminTicketTypesPage';
 import AdminSiteSettingsPage from './pages/admin/AdminSiteSettingsPage';
 import AdminGalleryPage from './pages/admin/AdminGalleryPage';
 import AdminHighlightsPage from './pages/admin/AdminHighlightsPage';
@@ -203,6 +204,7 @@ const App = () => (
       <Route path="djs" element={<AdminDJsPage />} />
       <Route path="dj-applications" element={<AdminDJApplicationsPage />} />
       <Route path="tickets" element={<AdminTicketsPage />} />
+      <Route path="ticket-types" element={<AdminTicketTypesPage />} />
       <Route path="playlists" element={<AdminPlaylistsPage />} />
       <Route path="mixes" element={<AdminMixesPage />} />
       <Route path="gallery" element={<AdminGalleryPage />} />

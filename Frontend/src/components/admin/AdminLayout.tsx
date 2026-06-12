@@ -13,6 +13,7 @@ const adminNav = [
   { label: 'Venues', path: '/admin/venues' },
   { label: 'Genres', path: '/admin/genres' },
   { label: 'Tickets', path: '/admin/tickets' },
+  { label: 'Ticket Types', path: '/admin/ticket-types' },
   { label: 'Playlists', path: '/admin/playlists' },
   { label: 'Mixes', path: '/admin/mixes' },
   { label: 'Gallery', path: '/admin/gallery' },

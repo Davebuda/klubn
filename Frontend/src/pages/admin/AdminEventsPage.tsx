@@ -1,4 +1,5 @@
 import { FormEvent, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useLazyQuery, useMutation, useQuery } from '@apollo/client';
 import {
   CREATE_EVENT,
@@ -334,6 +335,12 @@ const AdminEventsPage = () => {
                 <td className="py-3 text-gray-400">{event.venue?.name}</td>
                 <td className="py-3 text-gray-400">kr {event.price}</td>
                 <td className="py-3 text-right space-x-2">
+                  <Link
+                    to={`/admin/ticket-types?eventId=${event.id}`}
+                    className="text-xs uppercase tracking-wide text-gray-300 hover:text-white"
+                  >
+                    Tiers
+                  </Link>
                   <button
                     type="button"
                     className="text-xs uppercase tracking-wide text-orange-400"
