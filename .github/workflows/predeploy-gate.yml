@@ -1,0 +1,161 @@
+name: Pre-deploy E2E gate
+
+# Heavy buyer + door journey gate (Playwright + a real Sandbox backend + a Mailpit sink). Kept as
+# its OWN workflow with deliberately narrow triggers so it does NOT run on every push:
+#   - workflow_dispatch: run on demand (e.g. right before a deploy).
+#   - pull_request -> main, PATH-FILTERED to the buyer-journey + suite surface, so it only fires
+#     when code it actually exercises changes.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Frontend/src/pages/EventTicketsPage.tsx'
+      - 'Frontend/src/pages/CheckoutReturnPage.tsx'
+      - 'Frontend/src/pages/TicketsPage.tsx'
+      - 'Frontend/src/pages/LoginPage.tsx'
+      - 'Frontend/src/pages/admin/ScanPage.tsx'
+      - 'Frontend/src/context/AuthContext.tsx'
+      - 'Frontend/src/apollo-client.ts'
+      - 'Frontend/nginx.conf'
+      - 'Frontend/tests/predeploy/**'
+      - 'Program.cs'
+      - 'Infrastructure/Payments/**'
+      - 'Application/Services/EmailService.cs'
+      - 'Application/Services/OrderConfirmationService.cs'
+      - 'Application/Services/CheckoutQuoteService.cs'
+      - 'Application/Services/TicketService.cs'
+      - 'scripts/e2e/**'
+      - '.github/workflows/predeploy-gate.yml'
+
+# Cancel an in-flight run when the PR gets new commits.
+concurrency:
+  group: predeploy-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  predeploy-gate:
+    name: Buyer + door journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    # Mailpit sink as a service container (SMTP 1025 / HTTP API 8025), reachable on localhost.
+    services:
+      mailpit:
+        image: axllent/mailpit
+        ports:
+          - 1025:1025
+          - 8025:8025
+
+    env:
+      # Backend: Sandbox provider, Development (so completeSandboxPayment/reconcile finalize),
+      # fresh SQLite DB, email -> the Mailpit service (no-auth via the EmailService test affordance).
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://localhost:5102
+      Payments__Provider: Sandbox
+      Payments__Providers: Sandbox
+      Sandbox__WebhookSecret: sandbox-webhook-secret
+      ConnectionStrings__DefaultConnection: 'Data Source=DJDIP_predeploy.db'
+      Jwt__Key: predeploy-dummy-signing-key-please-32chars-minimum-ok
+      Jwt__Issuer: DJDiP
+      Jwt__Audience: DJDiP
+      Qr__SigningSecret: 'predeploy-dummy-qr-signing-secret-32chars-min!!'
+      Email__Enabled: 'true'
+      Email__SmtpHost: 127.0.0.1
+      Email__SmtpPort: '1025'
+      Email__Username: ''         # empty -> EmailService skips auth + StartTlsWhenAvailable (test sink)
+      Email__UseSsl: 'false'
+      Email__FromAddress: noreply@klubn.test
+      Email__FromName: KlubN
+      Ticketing__CheckoutReturnUrl: http://localhost:3000/checkout/return
+      AppSettings__FrontendUrl: http://localhost:3000
+      AppSettings__BaseUrl: http://localhost:5102
+      CORS__AllowedOrigins: 'http://localhost:3000,http://localhost:8080'
+      ADMIN_EMAIL: admin@e2e.local
+      ADMIN_DEFAULT_PASSWORD: 'E2eAdminPass123!'
+      # Frontend: same-origin as prod (Traefik) via the test-gated vite proxy.
+      VITE_API_URL: /graphql
+      PREDEPLOY_PROXY_TARGET: http://localhost:5102
+      PREDEPLOY_BASE_URL: http://localhost:3000
+      PREDEPLOY_MAILPIT_URL: http://localhost:8025
+      E2E_BASE_URL: http://localhost:5102
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve workspace-relative paths
+        run: |
+          echo "E2E_DB=$GITHUB_WORKSPACE/DJDIP_predeploy.db" >> "$GITHUB_ENV"
+          echo "PREDEPLOY_FIXTURES=$GITHUB_WORKSPACE/Frontend/tests/predeploy/.fixtures.json" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      - name: Build backend
+        run: dotnet build DJ-DiP.sln --configuration Release
+
+      - name: Start backend (Sandbox, fresh DB)
+        run: |
+          rm -f DJDIP_predeploy.db
+          nohup dotnet run --project DJDiP.csproj --no-launch-profile --no-build --configuration Release > backend.log 2>&1 &
+          for i in $(seq 1 90); do
+            curl -fsS http://localhost:5102/health >/dev/null 2>&1 && { echo "backend up"; break; }
+            sleep 2
+          done
+          curl -fsS http://localhost:5102/health >/dev/null || { echo "backend never became ready"; tail -n 100 backend.log; exit 1; }
+
+      - name: Seed fixtures
+        run: python3 scripts/e2e/seed_predeploy.py
+
+      - name: Frontend deps
+        working-directory: Frontend
+        run: npm ci
+
+      - name: Start Vite dev (same-origin proxy)
+        working-directory: Frontend
+        run: |
+          nohup npm run dev > ../vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS http://localhost:3000 >/dev/null 2>&1 && { echo "vite up"; break; }
+            sleep 2
+          done
+          curl -fsS http://localhost:3000 >/dev/null || { echo "vite never became ready"; tail -n 100 ../vite.log; exit 1; }
+
+      - name: Install Playwright (node_modules only)
+        working-directory: Frontend
+        run: |
+          npm install --no-save --no-package-lock @playwright/test@latest
+          npx playwright install --with-deps chromium
+
+      - name: Run gate (dev buyer journey)
+        working-directory: Frontend
+        run: npx playwright test -c tests/predeploy/playwright.config.ts buyer-journey promo-unlock email scan-admission providers
+
+      - name: Prod-build CSP smoke
+        run: |
+          docker build -t klubn-fe-predeploy --build-arg VITE_API_URL=http://localhost:5102/graphql -f Frontend/Dockerfile Frontend
+          docker run -d --name klubn-fe-predeploy -p 8080:80 klubn-fe-predeploy
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080 >/dev/null 2>&1 && break
+            sleep 2
+          done
+          cd Frontend && PREDEPLOY_BASE_URL=http://localhost:8080 npx playwright test -c tests/predeploy/playwright.config.ts prodbuild-smoke
+
+      - name: Upload Playwright report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: predeploy-playwright-report
+          path: |
+            Frontend/playwright-report
+            Frontend/test-results
+            backend.log
+            vite.log
+          retention-days: 7
