@@ -259,7 +259,13 @@ const EventTicketsPage = () => {
   // Drop selected-quantity state for any tier that is no longer visible (e.g. a hidden tier
   // that was revealed, had a quantity chosen, then hidden again when the promo was cleared).
   // Without this, a quantity would linger as a ghost line in the cart key / quote.
+  //
+  // GUARD: applying a promo/unlock code re-runs GET_TICKET_TYPES with a new `unlockCode` variable;
+  // that is a cache MISS, so `tiersData` is momentarily undefined and `visibleTiers` is [] DURING
+  // the refetch. Without this guard the cleanup would treat every selected tier as "gone" and wipe
+  // the buyer's cart the instant they apply a code. Only reconcile against a real, loaded tier list.
   useEffect(() => {
+    if (!tiersData?.ticketTypes) return; // tiers still (re)loading — don't nuke the cart
     const visibleIds = new Set(visibleTiers.map((t) => t.id));
     setQuantities((prev) => {
       const stale = Object.keys(prev).filter((tid) => prev[tid] > 0 && !visibleIds.has(tid));
@@ -268,7 +274,7 @@ const EventTicketsPage = () => {
       for (const tid of stale) delete next[tid];
       return next;
     });
-  }, [visibleTiers]);
+  }, [visibleTiers, tiersData]);
 
   const allSoldOut = visibleTiers.length > 0 && visibleTiers.every((t) => t.available === 0);
 
