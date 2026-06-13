@@ -1,9 +1,18 @@
 import { FormEvent, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+
+// Only allow returning to an internal, single-leading-slash path — never an
+// absolute or protocol-relative URL (open-redirect guard).
+const safeRedirect = (raw: string | null): string => {
+  if (!raw) return '/dashboard';
+  if (!raw.startsWith('/') || raw.startsWith('//')) return '/dashboard';
+  return raw;
+};
 
 const LoginPage = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { login, loading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -16,7 +25,7 @@ const LoginPage = () => {
     setError('');
     try {
       await login(email, password);
-      navigate('/dashboard');
+      navigate(safeRedirect(searchParams.get('redirect')), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to login with those credentials.');
     } finally {

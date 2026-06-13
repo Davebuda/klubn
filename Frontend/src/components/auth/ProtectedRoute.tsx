@@ -1,4 +1,4 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { ReactNode } from 'react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -8,6 +8,7 @@ interface Props {
 
 const ProtectedRoute = ({ children }: Props) => {
   const { isAuthenticated, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -18,7 +19,10 @@ const ProtectedRoute = ({ children }: Props) => {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    // Carry the attempted path so /login can return the user here after sign-in
+    // (e.g. a just-paid buyer bounced from /tickets before auth re-hydrated).
+    const redirect = `${location.pathname}${location.search}`;
+    return <Navigate to={`/login?redirect=${encodeURIComponent(redirect)}`} replace />;
   }
 
   return <>{children}</>;
