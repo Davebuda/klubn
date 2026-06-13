@@ -25,22 +25,21 @@ jobs:
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
+    # The repo root holds both DJ-DiP.sln and DJDiP.csproj (+ project files), so bare
+    # `dotnet restore`/`build`/`publish` fail with MSB1011 ("more than one project or
+    # solution"). Target the solution for restore/build/test and the web composition-root
+    # project (DJDiP.csproj) for publish, matching the documented local commands.
     - name: Restore dependencies
-      run: dotnet restore
+      run: dotnet restore DJ-DiP.sln
 
     - name: Build
-      run: dotnet build --configuration Release --no-restore
+      run: dotnet build DJ-DiP.sln --configuration Release --no-restore
 
-    - name: Run tests (if tests exist)
-      run: |
-        if find . -name "*.Tests.csproj" -o -name "*.Test.csproj" | grep -q .; then
-          dotnet test --no-build --verbosity normal --configuration Release
-        else
-          echo "No test projects found, skipping tests"
-        fi
+    - name: Run tests
+      run: dotnet test Tests/Tests.csproj --configuration Release --no-build --verbosity normal
 
     - name: Publish
-      run: dotnet publish --configuration Release --output ./publish --no-build
+      run: dotnet publish DJDiP.csproj --configuration Release --output ./publish --no-build
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
