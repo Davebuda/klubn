@@ -6,7 +6,9 @@
 # made the prod runtime patch level unprovable — 10.0.9 carries the Apr/Jun 2026 security
 # fixes (CVE-2026-40372 DataProtection forgery, CVE-2026-45591 unauth DoS, et al.).
 # Bump this tag deliberately on each .NET servicing release.
-FROM mcr.microsoft.com/dotnet/sdk:10.0.9 AS build
+# NOTE: SDK tags use feature-band numbering (10.0.3xx), NOT the runtime's 10.0.x —
+# sdk:10.0.301 is the servicing SDK paired with runtime/aspnet 10.0.9.
+FROM mcr.microsoft.com/dotnet/sdk:10.0.301 AS build
 WORKDIR /src
 
 # Copy csproj files and restore dependencies
