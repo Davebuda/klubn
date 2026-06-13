@@ -50,6 +50,36 @@ const API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:5000/graphql
   '',
 );
 
+// /api/auth/refresh ROTATES the refresh token, so it is NOT safe to call concurrently: a second
+// in-flight call races the rotation and can land logged-out. React StrictMode double-mounts the
+// provider in dev (firing two restore() effects), so dedupe to a SINGLE in-flight refresh that
+// both mounts share. (Harmless in prod, where there is no double-mount.)
+let inFlightRefresh: Promise<{ accessToken: string; user: User } | null> | null = null;
+function refreshSessionOnce(apiBase: string): Promise<{ accessToken: string; user: User } | null> {
+  if (!inFlightRefresh) {
+    inFlightRefresh = (async () => {
+      try {
+        const csrf = readCsrfToken();
+        const res = await fetch(`${apiBase}/api/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include',
+          headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data?.accessToken && data?.user
+          ? { accessToken: data.accessToken as string, user: data.user as User }
+          : null;
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      inFlightRefresh = null;
+    });
+  }
+  return inFlightRefresh;
+}
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   // P0-WS3B — access token in React state (memory) only; NEVER localStorage. The refresh token is
@@ -71,31 +101,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   // means logged-out. The CSRF token is read from the non-HttpOnly klubn_csrf cookie.
   useEffect(() => {
     let cancelled = false;
-    const restore = async () => {
-      try {
-        const csrf = readCsrfToken();
-        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: csrf ? { 'X-CSRF-Token': csrf } : {},
-        });
-        if (!res.ok) {
-          if (!cancelled) setSession(null, null);
-          return;
-        }
-        const data = await res.json();
-        if (!cancelled && data?.accessToken && data?.user) {
-          setSession(data.accessToken, data.user as User);
-        } else if (!cancelled) {
-          setSession(null, null);
-        }
-      } catch {
-        if (!cancelled) setSession(null, null);
-      } finally {
+    refreshSessionOnce(API_BASE)
+      .then((result) => {
+        if (cancelled) return;
+        if (result) setSession(result.accessToken, result.user);
+        else setSession(null, null);
+      })
+      .finally(() => {
         if (!cancelled) setLoading(false);
-      }
-    };
-    restore();
+      });
     return () => {
       cancelled = true;
     };
