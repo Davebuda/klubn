@@ -7,7 +7,7 @@ on:
     branches: [ main, develop ]
 
 env:
-  DOTNET_VERSION: '8.0.x'
+  DOTNET_VERSION: '10.0.x'
   NODE_VERSION: '20.x'
 
 jobs:
@@ -96,6 +96,13 @@ jobs:
     needs: [backend-build, frontend-build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
+    # The `secrets` context is NOT allowed in `if:` expressions (workflow-parse error that
+    # fails the whole run in 0s). Surface the Docker creds as env at the job level so the
+    # login step can gate on the `env` context, which IS permitted in `if:`.
+    env:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -104,11 +111,11 @@ jobs:
       uses: docker/setup-buildx-action@v3
 
     - name: Login to Docker Hub
+      if: env.DOCKER_USERNAME != '' && env.DOCKER_PASSWORD != ''
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKER_USERNAME }}
         password: ${{ secrets.DOCKER_PASSWORD }}
-      if: secrets.DOCKER_USERNAME != '' && secrets.DOCKER_PASSWORD != ''
 
     - name: Build Backend Docker image
       uses: docker/build-push-action@v5
