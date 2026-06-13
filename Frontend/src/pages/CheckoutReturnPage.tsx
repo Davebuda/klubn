@@ -117,9 +117,18 @@ const CheckoutReturnPage = () => {
     }
   };
 
-  // Sandbox (dev): auto-call completeSandboxPayment once, then start polling.
+  // The return page is reached by a FULL-PAGE redirect from the payment provider, so the
+  // in-memory access token is gone until AuthProvider re-hydrates it via /api/auth/refresh.
+  // completeSandboxPayment / reconcileTicketOrder are auth-gated (owner-checked) — calling them
+  // before auth settles 401s with "Authentication required.", which the global apollo errorLink
+  // turns into a hard redirect to /login?expired=1 (the "paid -> login" bug). So we only fire the
+  // auth-required calls once auth is READY and the buyer is authenticated. The public ticketOrder
+  // poll keeps running regardless, so a webhook-finalized order still shows success.
+  const authReady = !authLoading && isAuthenticated;
+
+  // Sandbox (dev): auto-call completeSandboxPayment once auth is ready, then start polling.
   useEffect(() => {
-    if (!isSandbox || !reference || sandboxDone) return;
+    if (!isSandbox || !reference || sandboxDone || !authReady) return;
 
     const run = async () => {
       try {
@@ -134,7 +143,7 @@ const CheckoutReturnPage = () => {
 
     run();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSandbox, reference]);
+  }, [isSandbox, reference, authReady]);
 
   // Real provider (Vipps): poll-reconcile until paid or max polls reached. The
   // mutation is idempotent server-side (shares the webhook's exactly-once path),
@@ -146,7 +155,9 @@ const CheckoutReturnPage = () => {
     if (isPaid || isFailed || !reference) return;
 
     const tick = async () => {
-      if (!isSandbox) {
+      // reconcile is auth-gated; only call it once auth has re-hydrated (see authReady note above).
+      // refetch (public ticketOrder) always runs, so a webhook-finalized order still surfaces.
+      if (!isSandbox && authReady) {
         try {
           await reconcileOrder({ variables: { reference } });
         } catch {
@@ -156,7 +167,7 @@ const CheckoutReturnPage = () => {
       refetch();
     };
 
-    if (!isSandbox) tick(); // reconcile immediately on landing, not after 2s
+    if (!isSandbox) tick(); // poll immediately on landing, not after 2s
 
     intervalRef.current = setInterval(() => {
       setPollCount((prev) => {
@@ -173,7 +184,7 @@ const CheckoutReturnPage = () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPaid, isFailed, reference, isSandbox]);
+  }, [isPaid, isFailed, reference, isSandbox, authReady]);
 
   // ── Missing reference ────────────────────────────────────────────────────
   if (!reference) {

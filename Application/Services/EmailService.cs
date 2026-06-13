@@ -173,12 +173,18 @@ namespace DJDiP.Application.Services
                 message.Body = builder.ToMessageBody();
 
                 using var client = new SmtpClient();
+                // Prod (Gmail) sets Username → mandatory STARTTLS on 587 + auth, unchanged.
+                // A local test sink (Mailpit/smtp4dev) leaves Username empty → connect without
+                // requiring STARTTLS and skip auth, so a pre-deploy harness can capture mail
+                // with no real SMTP creds. UseSsl=true still forces SslOnConnect either way.
+                var hasAuth = !string.IsNullOrEmpty(_settings.Username);
                 var secureOption = _settings.UseSsl
                     ? SecureSocketOptions.SslOnConnect
-                    : SecureSocketOptions.StartTls;
+                    : (hasAuth ? SecureSocketOptions.StartTls : SecureSocketOptions.StartTlsWhenAvailable);
 
                 await client.ConnectAsync(_settings.SmtpHost, _settings.SmtpPort, secureOption);
-                await client.AuthenticateAsync(_settings.Username, _settings.Password);
+                if (hasAuth)
+                    await client.AuthenticateAsync(_settings.Username, _settings.Password);
                 await client.SendAsync(message);
                 await client.DisconnectAsync(true);
 
