@@ -244,6 +244,35 @@ namespace DJDiP.Infrastructure.Persistance
             }
             catch { /* columns already exist or table doesn't exist yet (handled by EnsureCreated) */ }
 
+            // ── Legacy-column relaxation (2026-06-13 hotfix) ──────────────────────────────
+            // The catch-up DDL above only ADDs columns; it never drops the legacy ones the
+            // model migrated away from. The pre-ticketing "OrderItems" carried a NOT NULL
+            // "UnitPrice" (decimal) that the model replaced with "UnitPriceMinor" (long). On an
+            // existing Postgres table that column lingers NOT NULL with no default, so the FIRST
+            // real order INSERT — which no longer sets it — fails with a not-null violation. This
+            // is invisible on SQLite (rebuilt fresh from the current model, no such column) and on
+            // any environment that never inserted an order. Relax NOT NULL on any "OrderItems"
+            // column the current model does not write. Idempotent and NON-DESTRUCTIVE: keeps the
+            // column and any legacy data; only drops the constraint so new inserts can omit it.
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(
+                    @"DO $do$
+                      DECLARE c record;
+                      BEGIN
+                        FOR c IN
+                          SELECT column_name FROM information_schema.columns
+                          WHERE table_schema = 'public' AND table_name = 'OrderItems'
+                            AND is_nullable = 'NO' AND column_default IS NULL
+                            AND column_name NOT IN ('Id','OrderId','EventId','Quantity','TicketTypeId',
+                                                    'UnitPriceMinor','UnitVatRate','LineTotalMinor','DiscountMinor')
+                        LOOP
+                          EXECUTE format('ALTER TABLE ""OrderItems"" ALTER COLUMN %I DROP NOT NULL', c.column_name);
+                        END LOOP;
+                      END $do$;");
+            }
+            catch { /* SQLite (no information_schema / DO blocks) or already relaxed — safe to ignore */ }
+
             // ── DEV CONVENIENCE: EventHighlights table + one sample published highlight ──
             // Runtime uses EnsureCreated (not migrations), so a newly-added table is NOT created
             // on an already-existing database. Create it and seed one published highlight so the
