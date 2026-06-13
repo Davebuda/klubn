@@ -558,3 +558,9 @@ Frontend/*.jpeg
 .scout/
 .claude/screenshots/
 .playwright-mcp/
+Frontend/tests/predeploy/.fixtures.json
+Frontend/playwright-report/
+Frontend/test-results/
+.predeploy-logs/
+DJDIP_predeploy.db
+playwright-report/
