@@ -2,8 +2,11 @@
 # Multi-stage build for optimized production image
 
 # Stage 1: Build
-# .NET 10 GA (was 10.0-preview, which predates ForwardedHeadersOptions.KnownIPNetworks used by WS3A)
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# .NET 10 GA, PINNED to a servicing patch (release-gate P1 2026-06-13): floating :10.0
+# made the prod runtime patch level unprovable — 10.0.9 carries the Apr/Jun 2026 security
+# fixes (CVE-2026-40372 DataProtection forgery, CVE-2026-45591 unauth DoS, et al.).
+# Bump this tag deliberately on each .NET servicing release.
+FROM mcr.microsoft.com/dotnet/sdk:10.0.9 AS build
 WORKDIR /src
 
 # Copy csproj files and restore dependencies
@@ -24,7 +27,8 @@ FROM build AS publish
 RUN dotnet publish "DJDiP.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 # Stage 3: Runtime
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
+# Runtime pinned to the same servicing patch as the build stage (see note above).
+FROM mcr.microsoft.com/dotnet/aspnet:10.0.9 AS final
 WORKDIR /app
 
 # Create non-root user
