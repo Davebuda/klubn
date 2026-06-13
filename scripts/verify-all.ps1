@@ -30,6 +30,13 @@ $e2eDb     = Join-Path $repoRoot "DJDIP_e2e.db"
 $frontendDir = Join-Path $repoRoot "Frontend"
 
 # ---- suite groupings -----------------------------------------------------------
+# NOTE (release-gate P2, 2026-06-13): the PromoAttemptThrottle is process-local IMemoryCache
+# keyed by client IP, and every suite in a phase hits the SAME backend from the SAME loopback IP
+# within one 10-min window — so FAILED promo/unlock attempts accumulate ACROSS suites toward the
+# 15-failure threshold. It stays well under today because valid promos/unlocks interleave and
+# Reset() the counter. If you add a suite that fires ~13+ consecutive INVALID promo/unlock codes
+# with no intervening success, it can self-throttle later assertions: reset between suites or run
+# it in its own backend boot.
 # Development-boot suites (ASPNETCORE_ENVIRONMENT=Development, port 5102)
 $devSuites = @(
     "checkout_quote"
@@ -199,7 +206,10 @@ if ($SkipE2E) {
             "Email__Enabled"                    = "false"
             "ADMIN_EMAIL"                       = "admin@e2e.local"
             "ADMIN_DEFAULT_PASSWORD"            = "E2eAdminPass123!"
-            "N8N_SECRET"                        = "e2e-n8n-secret"
+            # >= 32 chars to satisfy the startup entropy floor (release-gate P2, 2026-06-13).
+            # The python suites read E2E_N8N_SECRET (not set here) and SKIP the ingest leg, so the
+            # exact value is irrelevant to them — only the backend's boot validation sees it.
+            "N8N_SECRET"                        = "e2e-n8n-shared-secret-0123456789-abc"
         }
     }
 

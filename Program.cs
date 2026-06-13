@@ -84,6 +84,41 @@ if (string.IsNullOrWhiteSpace(jwtKey) || jwtKey.Length < 32)
         "Generate one with: openssl rand -base64 64");
 }
 
+// Release-gate P2 (2026-06-13): mirror the JWT fail-fast for the other long-lived secrets.
+// Presence was already enforced (compose `:?` / non-empty ctor checks); this adds an ENTROPY
+// floor (>= 32 chars) so a weak operator-chosen secret can't make QR door-token forgery,
+// webhook authenticity, or ingest auth brute-forceable. Scoped so it never blocks a legitimate
+// boot: the Vipps webhook secret is only required when Vipps is an enabled provider, and the
+// n8n secret only when one is configured at all (ingest is fail-closed when it is absent).
+const int MinSecretChars = 32;
+var qrSigningSecret = builder.Configuration["Qr:SigningSecret"];
+if (string.IsNullOrWhiteSpace(qrSigningSecret) || qrSigningSecret.Length < MinSecretChars)
+{
+    throw new InvalidOperationException(
+        "Qr:SigningSecret must be at least 32 characters (door-token HMAC key). " +
+        "Set env Qr__SigningSecret. Generate one with: openssl rand -base64 48");
+}
+var secretCheckProviders = (builder.Configuration["Payments:Providers"]
+        ?? builder.Configuration["Payments:Provider"] ?? string.Empty)
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+if (secretCheckProviders.Any(p => string.Equals(p, "Vipps", StringComparison.OrdinalIgnoreCase)))
+{
+    var vippsWebhookSecret = builder.Configuration["Vipps:WebhookSecret"];
+    if (string.IsNullOrWhiteSpace(vippsWebhookSecret) || vippsWebhookSecret.Length < MinSecretChars)
+    {
+        throw new InvalidOperationException(
+            "Vipps:WebhookSecret must be at least 32 characters when Vipps is an enabled provider. " +
+            "Set env Vipps__WebhookSecret to the value returned at webhook registration.");
+    }
+}
+var n8nSharedSecret = builder.Configuration["N8N_SECRET"];
+if (!string.IsNullOrWhiteSpace(n8nSharedSecret) && n8nSharedSecret.Length < MinSecretChars)
+{
+    throw new InvalidOperationException(
+        "N8N_SECRET, when set, must be at least 32 characters (x-n8n-secret ingest key). " +
+        "Generate one with: openssl rand -base64 48");
+}
+
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -99,6 +134,11 @@ builder.Services.AddAuthentication(options =>
         ClockSkew = TimeSpan.FromMinutes(1),
         ValidIssuer = builder.Configuration["Jwt:Issuer"],
         ValidAudience = builder.Configuration["Jwt:Audience"],
+        // Release-gate P2 (2026-06-13): pin the accepted signing algorithm to the one we
+        // actually issue (HMAC-SHA256, see AuthService) so a token presenting any other `alg`
+        // is rejected outright. Defense-in-depth against alg-confusion/downgrade — the
+        // symmetric key already blocks RS*/none, but pinning removes any reliance on defaults.
+        ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
         IssuerSigningKey = new SymmetricSecurityKey(
             Encoding.UTF8.GetBytes(jwtKey))
     };
@@ -231,6 +271,8 @@ builder.Services.AddScoped<IFollowService, FollowService>();
 // WS3A — per-account login lockout. Singleton: it wraps the singleton IMemoryCache; the scoped
 // AuthService receives it via constructor injection.
 builder.Services.AddSingleton<ILoginThrottle, LoginThrottle>();
+// Release-gate P2 (2026-06-13) — anti-enumeration throttle for anonymous promo/unlock guessing.
+builder.Services.AddSingleton<IPromoAttemptThrottle, PromoAttemptThrottle>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 // P0-WS3B — signed refresh-token + CSRF token minting/validation (no DB; reuses the JWT key).
 builder.Services.AddScoped<IRefreshTokenService, RefreshTokenService>();
@@ -511,6 +553,25 @@ using (var scope = app.Services.CreateScope())
 // anything reads Connection.RemoteIpAddress, so the rate limiter keys on the true client IP.
 app.UseForwardedHeaders();
 
+// Security Headers
+// Release-gate P2 (2026-06-13): this runs BEFORE the GraphQL body-cap middleware below so that
+// every response — including the body-cap's early 413 return, which never calls next() — still
+// carries the security headers. (Headers are appended on the way in, before next() dispatches.)
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Referrer-Policy", "no-referrer-when-downgrade");
+    context.Response.Headers.Append("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+    if (!app.Environment.IsDevelopment())
+    {
+        context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+    }
+    context.Response.Headers.Remove("Server");
+    await next();
+});
+
 // WS3A — request-body-size cap for /graphql. Reject POSTs whose Content-Length exceeds 1 MB with
 // 413 BEFORE the GraphQL parser runs (interim mitigation for the HC parser attack surface). This
 // is a targeted branch — the GLOBAL Kestrel limit is untouched so REST /api/FileUpload keeps 50 MB.
@@ -536,22 +597,6 @@ app.Use(async (context, next) =>
             sizeFeature.MaxRequestBodySize = GraphQlMaxBodyBytes;
         }
     }
-    await next();
-});
-
-// Security Headers
-app.Use(async (context, next) =>
-{
-    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
-    context.Response.Headers.Append("X-Frame-Options", "DENY");
-    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
-    context.Response.Headers.Append("Referrer-Policy", "no-referrer-when-downgrade");
-    context.Response.Headers.Append("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
-    if (!app.Environment.IsDevelopment())
-    {
-        context.Response.Headers.Append("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-    }
-    context.Response.Headers.Remove("Server");
     await next();
 });
 
@@ -697,6 +742,8 @@ public class Query
         Guid eventId,
         [Service] AppDbContext db,
         [Service] DJDiP.Application.Interfaces.IPromoCodeService promoCodes,
+        [Service] DJDiP.Application.Interfaces.IPromoAttemptThrottle promoThrottle,
+        [Service] IHttpContextAccessor accessor,
         string? unlockCode = null)
     {
         var types = await db.TicketTypes
@@ -710,11 +757,23 @@ public class Query
         // missing/invalid). Dedup by Id so a code can never double-list a tier.
         if (!string.IsNullOrWhiteSpace(unlockCode))
         {
-            var revealed = await promoCodes.ResolveHiddenUnlockAsync(unlockCode, eventId, default);
-            if (revealed.Count > 0)
+            // Release-gate P2 (2026-06-13): a throttled IP (too many failed guesses) gets the
+            // exact no-code behaviour — reveals nothing — so the anti-oracle property is preserved
+            // and brute-force enumeration of unlock codes is capped.
+            var ip = accessor.HttpContext?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            if (!promoThrottle.IsThrottled(ip))
             {
-                var known = types.Select(t => t.Id).ToHashSet();
-                types.AddRange(revealed.Where(r => known.Add(r.Id)));
+                var revealed = await promoCodes.ResolveHiddenUnlockAsync(unlockCode, eventId, default);
+                if (revealed.Count > 0)
+                {
+                    var known = types.Select(t => t.Id).ToHashSet();
+                    types.AddRange(revealed.Where(r => known.Add(r.Id)));
+                    promoThrottle.Reset(ip); // a valid unlock clears suspicion (protects NAT'd users)
+                }
+                else
+                {
+                    promoThrottle.RegisterFailure(ip); // non-empty code revealed nothing = a failed guess
+                }
             }
         }
 
@@ -748,15 +807,29 @@ public class Query
     public async Task<DJDiP.Application.DTO.PaymentDTO.CheckoutQuote> QuoteTicketOrder(
         DJDiP.Application.DTO.PaymentDTO.QuoteTicketOrderInput input,
         [Service] DJDiP.Application.Interfaces.ICheckoutQuoteService quotes,
+        [Service] DJDiP.Application.Interfaces.IPromoAttemptThrottle promoThrottle,
         [Service] IHttpContextAccessor accessor)
     {
         var userId = accessor.HttpContext?.User.FindFirst("userId")?.Value; // null when anonymous
+        var ip = accessor.HttpContext?.Connection.RemoteIpAddress?.ToString() ?? "unknown";
         var selectionLines = (input.Lines ?? new List<DJDiP.Application.DTO.PaymentDTO.OrderLineInput>())
             .Select(l => new DJDiP.Application.DTO.PaymentDTO.CheckoutSelectionLine(l.TicketTypeId, l.Quantity))
             .ToList();
+        // Release-gate P2 (2026-06-13): once an IP has brute-forced too many bad codes, suppress
+        // the promo lookup (price the cart WITHOUT it) — denies the validity oracle. Cart pricing
+        // is unaffected; only the promo portion is withheld for the cooldown window.
+        var hasPromo = !string.IsNullOrWhiteSpace(input.PromoCode);
+        var effectivePromo = (hasPromo && promoThrottle.IsThrottled(ip)) ? null : input.PromoCode;
         var selection = new DJDiP.Application.DTO.PaymentDTO.CheckoutSelection(
-            input.EventId, selectionLines, input.PromoCode);
-        return await quotes.QuoteAsync(selection, userId, default);
+            input.EventId, selectionLines, effectivePromo);
+        var quote = await quotes.QuoteAsync(selection, userId, default);
+        // Count a supplied-but-invalid code as a failed guess; a valid code clears the IP's counter.
+        if (hasPromo && effectivePromo is not null)
+        {
+            if (quote.Promo is { Ok: false }) promoThrottle.RegisterFailure(ip);
+            else if (quote.Promo is { Ok: true }) promoThrottle.Reset(ip);
+        }
+        return quote;
     }
 
     // Order/payment status by merchant reference (checkout-return polling).
@@ -1032,9 +1105,18 @@ public class Query
     // Gallery Media
     public async Task<IEnumerable<GalleryMediaDto>> GalleryMedia(
         bool? approvedOnly,
-        [Service] IGalleryMediaService galleryMediaService)
+        [Service] IGalleryMediaService galleryMediaService,
+        [Service] IHttpContextAccessor httpContextAccessor)
     {
-        return await galleryMediaService.GetAllAsync(approvedOnly ?? true);
+        // Release-gate P2 (2026-06-13): moderation is AUTHORIZATION, not a client toggle.
+        // Only a manager (Admin/CoAdmin) may request unmoderated media; for everyone else the
+        // `approvedOnly` arg is ignored and forced true. Closes the last corner of the WS1
+        // moderation gap — an anonymous caller could otherwise pull pre-moderation, scraped-from-
+        // social media via `galleryMedia(approvedOnly:false)`.
+        var role = Mutation.GetCurrentRole(httpContextAccessor);
+        var isManager = role == "Admin" || role == "CoAdmin";
+        var effectiveApprovedOnly = isManager ? (approvedOnly ?? true) : true;
+        return await galleryMediaService.GetAllAsync(effectiveApprovedOnly);
     }
 
     public async Task<IEnumerable<GalleryMediaDto>> FeaturedGalleryMedia(
@@ -3397,6 +3479,11 @@ public class Mutation
             throw new GraphQLException("Event not found.");
         if (string.IsNullOrWhiteSpace(input.Name))
             throw new GraphQLException("Ticket type name is required.");
+        // Release-gate P2 (2026-06-13): price is the source of truth for checkout math; a
+        // negative øre price would flow into quote/capture totals and the provider amount.
+        // The FE blocks it, but that is client-trust only — enforce server-side.
+        if (input.PriceMinor < 0)
+            throw new GraphQLException("Price cannot be negative.");
         if (input.Capacity < 0)
             throw new GraphQLException("Capacity cannot be negative.");
         if (input.AdmitCount < 1)
@@ -3441,7 +3528,13 @@ public class Mutation
 
         if (input.Name != null) tt.Name = input.Name;
         if (input.Description != null) tt.Description = input.Description;
-        if (input.PriceMinor.HasValue) tt.PriceMinor = input.PriceMinor.Value;
+        if (input.PriceMinor.HasValue)
+        {
+            // Release-gate P2 (2026-06-13): same negative-price guard as create.
+            if (input.PriceMinor.Value < 0)
+                throw new GraphQLException("Price cannot be negative.");
+            tt.PriceMinor = input.PriceMinor.Value;
+        }
         if (input.VATRate.HasValue) tt.VATRate = input.VATRate.Value;
         if (!string.IsNullOrWhiteSpace(input.Currency)) tt.Currency = input.Currency!;
         if (input.Capacity.HasValue)

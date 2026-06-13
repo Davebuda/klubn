@@ -47,6 +47,14 @@ Scanners: `dotnet list --vulnerable --include-transitive` 0 findings across 5 pr
 
 ## P2 — this sprint (none block release)
 
+> **ALL P2 ITEMS BELOW REMEDIATED 2026-06-13** (same day, audit-only follow-up commit).
+> Code-reviewer pass: APPROVE (0 Critical/High); full `verify-all` 17/17 green with the
+> changes in. Items 2–7 closed; see the per-item notes. Frozen baselines untouched; no
+> hard-stop weakened (throttle confined to READ paths, gallery gate *tightens* authz, secret
+> floors only strengthen, JWT alg-pin matches issuer). Ships dormant until next deploy —
+> **operator must confirm the VPS `.env` QR/Vipps-webhook/n8n secrets are ≥32 chars before the
+> next rebuild** (local `.env`, the prod-key source, verified ≥32: n8n 64, vipps-webhook 88, qr 43).
+
 2. `galleryMedia(approvedOnly:false)` — public list resolver trusts the client arg; anonymous
    callers read unmoderated ingested media (`Program.cs:1033-1038`,
    `GalleryMediaService.cs:16-27`). Incomplete corner of WS1 claim 1 (NOT a regression;

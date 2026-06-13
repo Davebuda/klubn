@@ -28,11 +28,16 @@ public class CheckoutController : ControllerBase
 {
     private readonly ICheckoutQuoteService _quotes;
     private readonly IPaymentOrchestrator _orchestrator;
+    private readonly IPromoAttemptThrottle _promoThrottle;
 
-    public CheckoutController(ICheckoutQuoteService quotes, IPaymentOrchestrator orchestrator)
+    public CheckoutController(
+        ICheckoutQuoteService quotes,
+        IPaymentOrchestrator orchestrator,
+        IPromoAttemptThrottle promoThrottle)
     {
         _quotes = quotes;
         _orchestrator = orchestrator;
+        _promoThrottle = promoThrottle;
     }
 
     // Identity from the JWT principal (same claim the GraphQL RequireAuthentication reads).
@@ -58,11 +63,21 @@ public class CheckoutController : ControllerBase
     public async Task<ActionResult<CheckoutQuote>> Quote(
         [FromBody] CheckoutQuoteRequest body, CancellationToken ct)
     {
+        // Release-gate P2 (2026-06-13): mirror the GraphQL quote throttle — a brute-forcing IP
+        // gets its promo lookup suppressed (cart still prices), denying the validity oracle.
+        var ip = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var hasPromo = !string.IsNullOrWhiteSpace(body.PromoCode);
+        var effectivePromo = (hasPromo && _promoThrottle.IsThrottled(ip)) ? null : body.PromoCode;
         var lines = (body.Lines ?? new List<OrderLineInput>())
             .Select(l => new CheckoutSelectionLine(l.TicketTypeId, l.Quantity))
             .ToList();
-        var selection = new CheckoutSelection(body.EventId, lines, body.PromoCode);
+        var selection = new CheckoutSelection(body.EventId, lines, effectivePromo);
         var quote = await _quotes.QuoteAsync(selection, CurrentUserId(), ct);
+        if (hasPromo && effectivePromo is not null)
+        {
+            if (quote.Promo is { Ok: false }) _promoThrottle.RegisterFailure(ip);
+            else if (quote.Promo is { Ok: true }) _promoThrottle.Reset(ip);
+        }
         return Ok(quote);
     }
 
