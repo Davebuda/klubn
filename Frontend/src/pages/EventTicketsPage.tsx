@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { useQuery, useMutation, useLazyQuery } from '@apollo/client';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   ChevronLeft,
   Minus,
@@ -210,12 +210,13 @@ const TicketTypeCard = ({ tier, qty, onQtyChange }: TicketTypeCardProps) => {
 
 const EventTicketsPage = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const { siteSettings } = useSiteSettings();
   const defaultImage = siteSettings.defaultEventImageUrl ?? '/media/defaults/event.svg';
 
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  const [customerEmail, setCustomerEmail] = useState(user?.email ?? '');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -287,7 +288,10 @@ const EventTicketsPage = () => {
   const currency = visibleTiers[0]?.currency ?? 'NOK';
 
   const hasSelection = selectedLines.length > 0;
-  const needsEmail = !user;
+  // createTicketOrder requires authentication (identity comes from the JWT, never client input),
+  // so a logged-out shopper can price a cart but must sign in to buy. The Pay CTA becomes
+  // "Sign in to buy" and routes through /login with a return to this page.
+  const needsLogin = !user;
 
   // ── Server-driven quote ─────────────────────────────────────────────────────
   // The cart key changes whenever quantities OR the applied promo change; we debounce
@@ -349,6 +353,14 @@ const EventTicketsPage = () => {
 
   const promoResult = quote?.promo ?? null;
 
+  // The provider the Pay button will actually use: the explicit pick, else the sole/first
+  // available. Drives a provider-honest CTA ("Pay with Vipps" / "Pay with Card") instead of a
+  // generic label — and falls back to generic only before any provider is known.
+  const chosenProvider = selectedProvider ?? availableProviders[0] ?? null;
+  const chosenProviderLabel = chosenProvider
+    ? PROVIDER_LABELS[chosenProvider] ?? chosenProvider
+    : null;
+
   const handleQtyChange = (tierId: string, qty: number) => {
     setQuantities((prev) => ({ ...prev, [tierId]: qty }));
     setErrorMsg(null);
@@ -367,8 +379,9 @@ const EventTicketsPage = () => {
 
   const handlePay = async () => {
     if (!hasSelection) return;
-    if (needsEmail && !customerEmail.trim()) {
-      setErrorMsg('Please enter your email address to continue.');
+    if (needsLogin) {
+      // Send the shopper to sign in, then bring them straight back to this ticket page.
+      navigate(`/login?redirect=${encodeURIComponent(location.pathname)}`);
       return;
     }
 
@@ -386,7 +399,7 @@ const EventTicketsPage = () => {
           input: {
             eventId: id,
             lines,
-            customerEmail: customerEmail.trim() || undefined,
+            customerEmail: user?.email || undefined,
             promoCode: appliedPromo || undefined,
             provider: selectedProvider || undefined,
           },
@@ -760,24 +773,12 @@ const EventTicketsPage = () => {
                   </fieldset>
                 )}
 
-                {/* Email for guests */}
-                {needsEmail && (
-                  <div className="space-y-1.5">
-                    <label htmlFor="customer-email" className="text-xs uppercase tracking-[0.3em] text-gray-400 font-semibold">
-                      Email for tickets
-                    </label>
-                    <input
-                      id="customer-email"
-                      type="email"
-                      value={customerEmail}
-                      onChange={(e) => {
-                        setCustomerEmail(e.target.value);
-                        setErrorMsg(null);
-                      }}
-                      placeholder="you@example.com"
-                      className="w-full rounded-xl bg-black/40 border border-white/15 px-3.5 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-orange-400/60 transition"
-                    />
-                  </div>
+                {/* Sign-in notice for logged-out shoppers — they can price the cart, but the
+                    ticket is issued to their account, so buying requires sign-in. */}
+                {needsLogin && hasSelection && (
+                  <p className="text-xs text-gray-400 text-center">
+                    Tickets are saved to your account — you'll sign in to complete your purchase.
+                  </p>
                 )}
 
                 {/* Error */}
@@ -793,7 +794,12 @@ const EventTicketsPage = () => {
                   type="button"
                   onClick={handlePay}
                   disabled={
-                    !hasSelection || submitting || allSoldOut || quotePending || !!quoteError
+                    // Logged-out shoppers only need a selection to proceed to sign-in; logged-in
+                    // buyers also need a settled, error-free quote before we charge them.
+                    !hasSelection ||
+                    submitting ||
+                    allSoldOut ||
+                    (!needsLogin && (quotePending || !!quoteError))
                   }
                   className="w-full rounded-full bg-gradient-to-r from-orange-400 to-[#FF6B35] px-6 py-4 text-black text-sm font-bold tracking-wide text-center hover:from-orange-300 hover:to-orange-400 hover:shadow-[0_0_28px_rgba(255,107,53,0.45)] hover:scale-[1.01] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-none transition-all"
                 >
@@ -801,8 +807,12 @@ const EventTicketsPage = () => {
                     ? 'Redirecting…'
                     : !hasSelection
                     ? 'Select tickets to continue'
+                    : needsLogin
+                    ? 'Sign in to buy'
                     : quotePending
                     ? 'Pricing your order…'
+                    : chosenProviderLabel
+                    ? `Pay with ${chosenProviderLabel}`
                     : 'Continue to payment'}
                 </button>
 

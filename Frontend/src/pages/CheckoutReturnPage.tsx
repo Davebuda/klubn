@@ -10,6 +10,7 @@ import {
 } from '../graphql/ticketing';
 import type { RetryTicketOrderData, RetryTicketOrderVars } from '../graphql/ticketing';
 import { formatMinor } from '../utils/money';
+import { useAuth } from '../context/AuthContext';
 import PageSeo from '../components/common/PageSeo';
 
 type OrderStatus = {
@@ -36,6 +37,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 const CheckoutReturnPage = () => {
   const [searchParams] = useSearchParams();
+  const { isAuthenticated, loading: authLoading } = useAuth();
   const reference = searchParams.get('reference') ?? '';
   // The Sandbox provider appends sandbox=1 to its return URL; the real provider
   // (Vipps) does not. This decides which completion path drives the order forward.
@@ -268,13 +270,28 @@ const CheckoutReturnPage = () => {
               </div>
             )}
 
+            {/* Auth-aware primary CTA. The just-paid buyer arrives via a full-page redirect
+                from the provider, so the in-memory access token is gone until /api/auth/refresh
+                re-hydrates the session. Until then `/tickets` (a ProtectedRoute) would bounce to
+                login — so we only offer "View My Tickets" once auth is confirmed, and otherwise
+                send them through login with a return to /tickets. Either way the ticket + QR are
+                already safe in their confirmation email (resolved server-side by reference). */}
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Link
-                to="/tickets"
-                className="px-6 py-3 rounded-full bg-gradient-to-r from-orange-400 to-[#FF6B35] text-black text-sm font-bold hover:from-orange-300 hover:to-orange-400 transition-all"
-              >
-                View My Tickets
-              </Link>
+              {!authLoading && isAuthenticated ? (
+                <Link
+                  to="/tickets"
+                  className="px-6 py-3 rounded-full bg-gradient-to-r from-orange-400 to-[#FF6B35] text-black text-sm font-bold hover:from-orange-300 hover:to-orange-400 transition-all"
+                >
+                  View My Tickets
+                </Link>
+              ) : (
+                <Link
+                  to="/login?redirect=%2Ftickets"
+                  className="px-6 py-3 rounded-full bg-gradient-to-r from-orange-400 to-[#FF6B35] text-black text-sm font-bold hover:from-orange-300 hover:to-orange-400 transition-all"
+                >
+                  Sign in to view tickets
+                </Link>
+              )}
               <Link
                 to="/events"
                 className="px-6 py-3 rounded-full border border-white/15 bg-white/[0.04] text-white text-sm font-semibold hover:border-orange-400/40 transition"
